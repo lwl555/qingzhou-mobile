@@ -1,0 +1,11 @@
+{
+  "appId": "com.qingzhou.app",
+  "appName": "轻舟",
+  "webDir": "mobile",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

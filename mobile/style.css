@@ -1,0 +1,90 @@
+/* 手机版样式：刻意"去 AI 味"——不用渐变、不用 emoji、不用彩色图标块，
+   只留白底 + 细边框 + 品牌蓝（仅用于发送按钮、用户气泡、状态点）。
+   目标是像一个正经的聊天工具，而不是一个 AI 演示页。 */
+:root{
+  --brand:#1d4ed8;
+  --ink:#111827;
+  --gray:#6b7280;
+  --gray2:#9ca3af;
+  --line:#e5e7eb;
+  --bg:#ffffff;
+  --bub:#f4f5f7;
+  --ok:#15803d;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  display:flex;flex-direction:column;overflow:hidden}
+
+/* ---------- 顶部 ---------- */
+.hd{display:flex;align-items:center;gap:10px;padding:11px 14px;
+  padding-top:calc(11px + env(safe-area-inset-top));
+  border-bottom:1px solid var(--line);background:#fff}
+.hd-title{font-size:15px;font-weight:500}
+.hd-sub{font-size:11.5px;color:var(--gray);display:flex;align-items:center;gap:5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:6px;height:6px;border-radius:50%;background:#c9ced8;flex:none}
+.dot.lan{background:var(--ok)}
+.dot.cloud{background:var(--brand)}
+.hd-btn{flex:none;border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:8px;padding:7px 12px;font-size:13px;min-height:34px}
+.hd-btn:active{background:#f3f4f6}
+
+/* ---------- 内容区 ---------- */
+.wrap{flex:1;overflow-y:auto}
+.msgs{padding:18px 14px 8px;display:flex;flex-direction:column;gap:16px}
+
+/* 空状态：问候 + 一句说明 + 朴素列表（不是彩色卡片） */
+.empty{padding:30px 20px 12px;max-width:520px;margin:0 auto;width:100%}
+.hi{font-size:22px;font-weight:500;margin-bottom:6px}
+.hi-sub{font-size:13px;color:var(--gray);line-height:1.7;margin:0 0 20px}
+.list{border-top:1px solid var(--line)}
+.item{display:flex;align-items:center;width:100%;text-align:left;gap:10px;
+  border:none;border-bottom:1px solid var(--line);background:#fff;
+  padding:14px 2px;font:inherit;font-size:14px;color:var(--ink);min-height:52px}
+.item:active{background:#f9fafb}
+.item .t{flex:1;min-width:0}
+.item .h{display:block;font-size:11.5px;color:var(--gray2);margin-top:2px}
+.item .go{color:var(--gray2);font-size:15px;flex:none}
+
+/* 消息气泡 */
+.msg{display:flex}
+.msg.me{justify-content:flex-end}
+.bub{max-width:82%;padding:10px 13px;border-radius:4px;background:var(--bub);
+  white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.7}
+.msg.me .bub{background:var(--brand);color:#fff}
+.typing{display:inline-block;color:var(--gray);font-size:13.5px}
+
+/* ---------- 输入区 ---------- */
+.composer{display:flex;align-items:flex-end;gap:10px;
+  padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--line);background:#fff}
+.field{flex:1;min-width:0;border:1px solid var(--line);border-radius:20px;
+  padding:7px 8px 7px 14px;background:#fff;display:flex;align-items:flex-end}
+.field:focus-within{border-color:var(--brand)}
+.field textarea{flex:1;border:none;outline:none;resize:none;background:none;
+  font:16px/1.5 inherit;color:var(--ink);max-height:110px;padding:4px 0}
+.send{flex:none;border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:20px;padding:0 18px;min-height:40px;font-size:14px}
+.send:active{background:#f3f4f6}
+.send.on{background:var(--brand);border-color:var(--brand);color:#fff}
+
+/* ---------- 底部抽屉 ---------- */
+.sheet{position:fixed;inset:0;background:rgba(17,24,39,.35);display:flex;align-items:flex-end;z-index:50}
+.sheet[hidden]{display:none}
+.sheet-box{width:100%;background:#fff;border-radius:14px 14px 0 0;
+  padding:6px 18px calc(18px + env(safe-area-inset-bottom))}
+.sheet-bar{width:36px;height:4px;border-radius:2px;background:#e5e7eb;margin:8px auto 14px}
+.sheet-box h3{margin:0 0 6px;font-size:15px;font-weight:500}
+.tip{margin:0 0 13px;font-size:12.5px;color:var(--gray);line-height:1.65}
+.sheet-box input{width:100%;border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+  font-size:16px;outline:none;margin-bottom:10px;background:#fff;color:var(--ink)}
+.sheet-box input:focus{border-color:var(--brand)}
+.row{display:flex;gap:10px}
+.row button{flex:1;border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:9px;padding:11px;font-size:14px;min-height:44px}
+.row button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+.scanlog{font-size:12px;color:var(--gray);margin-top:9px;min-height:16px;line-height:1.6}
+.tip2{margin:11px 0 0;font-size:11.5px;color:var(--gray2);line-height:1.6}
+.close{width:100%;border:none;background:none;color:var(--gray);padding:12px;font-size:14px}
