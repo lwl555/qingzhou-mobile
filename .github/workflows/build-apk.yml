@@ -18,8 +18,8 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      # 提供 Android SDK，用于 gradle 编译
-      - uses: android-actions/setup-android@v3
+      # 注：GitHub 的 ubuntu 镜像自带 Android SDK（ANDROID_HOME），
+      # 不需要再装；之前用的 android-actions/setup-android 已不可用，故去掉。
 
       - name: 安装依赖
         run: npm install
@@ -29,6 +29,13 @@ jobs:
 
       - name: 同步网页到安卓工程
         run: npx cap sync android
+
+      # gradle 需要知道 SDK 在哪
+      - name: 指定 SDK 路径
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties || true
+
+      - name: 接受 Android 许可
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
 
       # 手机上要直连电脑的 http://192.168.x.x:8787，必须允许明文流量，
       # 否则 Android 9+ 默认禁止，局域网模式会连不上
