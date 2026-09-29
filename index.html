@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>轻舟</title>
+<meta name="theme-color" content="#1d4ed8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header class="hd">
+  <div class="hd-txt" style="flex:1;min-width:0">
+    <div class="hd-title">轻舟</div>
+    <div class="hd-sub"><span class="dot" id="dot"></span><span id="statText">检测中…</span></div>
+  </div>
+  <button class="hd-btn" id="cfgBtn">连接</button>
+</header>
+
+<div class="wrap" id="wrap">
+  <div class="empty" id="empty">
+    <div class="hi" id="hi">你好</div>
+    <p class="hi-sub">在家连你电脑用本地模型，出门自动走云端。</p>
+    <div class="list" id="list"></div>
+  </div>
+  <div class="msgs" id="msgs"></div>
+</div>
+
+<div class="composer">
+  <div class="field">
+    <textarea id="txt" rows="1" placeholder="说点什么"></textarea>
+  </div>
+  <button class="send" id="send">发送</button>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-box">
+    <div class="sheet-bar"></div>
+    <h3>连接电脑</h3>
+    <p class="tip">手机和电脑在同一个 Wi-Fi 时填它的局域网地址，之后打开就自动直连，能用电脑上的模型、文件和工具。</p>
+    <input id="ipInput" placeholder="例如 192.168.1.5" inputmode="numeric">
+    <div class="row">
+      <button id="scanBtn">扫描</button>
+      <button id="saveBtn" class="primary">连接</button>
+    </div>
+    <div class="scanlog" id="scanLog"></div>
+
+    <h3 style="margin-top:18px">远程（在外面连电脑）</h3>
+    <p class="tip">先在电脑上打开「远程操作」，会显示一个本机号码；把号码填到这里，之后在外面也能直接操作那台电脑。</p>
+    <input id="pcIdInput" placeholder="例如 A3F9K2" autocapitalize="characters">
+    <div class="row">
+      <button id="remoteBtn" class="primary">连远程</button>
+    </div>
+
+    <p class="tip2">不填也能用：连不上电脑时会自动用云端模型。</p>
+    <button class="close" id="closeSheet">关闭</button>
+  </div>
+</div>
+
+<!-- 远程功能需要用到实时通道组件；加载失败也不影响局域网和云端两种模式 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.min.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
