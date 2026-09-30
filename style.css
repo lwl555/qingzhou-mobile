@@ -54,7 +54,12 @@ body{background:var(--bg);color:var(--ink);
 .bub{max-width:82%;padding:10px 13px;border-radius:4px;background:var(--bub);
   white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.7}
 .msg.me .bub{background:var(--brand);color:#fff}
-.typing{display:inline-block;color:var(--gray);font-size:13.5px}
+/* 思考中：三点跳动（替代原来死的"处理中…"，更有"活气"但不花哨） */
+.typing{display:inline-flex;gap:4px;align-items:center;height:18px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--gray2);display:inline-block;animation:dotB .9s infinite ease-in-out}
+.typing i:nth-child(2){animation-delay:.15s}
+.typing i:nth-child(3){animation-delay:.3s}
+@keyframes dotB{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
 
 /* ---------- 输入区 ---------- */
 .composer{display:flex;align-items:flex-end;gap:10px;
@@ -113,5 +118,39 @@ body{background:var(--bg);color:var(--ink);
 
 /* 图片附件提示条 */
 .attach{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--line);
-  background:#f9fafb;font-size:12.5px;color:var(--gray)}
+  background:#f9fafb;font-size:12.5px;color:var(--gray);animation:fadeIn .22s ease both}
 .attach .x{border:none;background:none;color:var(--gray2);font-size:16px;line-height:1;padding:0 2px;flex:none}
+
+/* ============ 克制的微动画（守住简约商务风：无渐变、无发光、无花哨） ============ */
+/* 顶部与首屏轻微淡入 */
+.hd,.empty{animation:fadeIn .4s ease both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* 消息气泡：轻轻上浮淡入 */
+.msg{animation:msgIn .28s cubic-bezier(.2,.7,.3,1) both}
+@keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* 示例卡片：错峰浮现，比整齐划一更有"产品感" */
+.chip{animation:chipIn .42s ease both}
+.chip:nth-child(1){animation-delay:.04s}
+.chip:nth-child(2){animation-delay:.10s}
+.chip:nth-child(3){animation-delay:.16s}
+.chip:nth-child(4){animation-delay:.22s}
+@keyframes chipIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* 连接后状态点：轻柔"呼吸"（同色、不发光），没连上是静止灰点——本身就是信号 */
+.dot.lan{color:var(--ok)}
+.dot.cloud{color:var(--brand)}
+.dot.lan,.dot.cloud{animation:breath 2s ease-in-out infinite}
+@keyframes breath{0%,100%{opacity:.5;transform:scale(.82)}50%{opacity:1;transform:scale(1)}}
+
+/* 按钮/卡片按压回弹 */
+.send,.hd-btn,.row button,.chip,.ic,.item{transition:transform .12s ease,background .15s ease,border-color .15s ease,color .15s ease}
+.send:active,.hd-btn:active,.row button:active,.chip:active,.ic:active,.item:active{transform:scale(.97)}
+.send.on{transition:transform .12s ease,background .15s ease,color .15s ease}
+
+/* 底部抽屉：遮罩淡入 + 面板下滑（不是生硬弹出） */
+.sheet{animation:sheetIn .24s ease both}
+@keyframes sheetIn{from{opacity:0}to{opacity:1}}
+.sheet-box{animation:sheetUp .3s cubic-bezier(.2,.7,.3,1) both}
+@keyframes sheetUp{from{transform:translateY(100%)}to{transform:none}}

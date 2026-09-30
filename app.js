@@ -244,7 +244,7 @@ async function send() {
   addMsg('me', text || '（图片）');
   if (state.awaitName && text) { setName(text); clearAttach(); return; }
 
-  const bub = addMsg('ai', '处理中…', true);
+  const bub = addMsg('ai', '', { thinking: true });
   try {
     if (state.mode === 'lan') {
       let first = true;
@@ -343,16 +343,23 @@ function fillModels() {
 /* ---------------- 渲染 ---------------- */
 function showMsgs() { empty.hidden = true; }
 
-function addMsg(who, text, isHTML) {
+function addMsg(who, text, opts) {
+  opts = opts || {};
   const el = document.createElement('div');
   el.className = 'msg ' + who;
   const b = document.createElement('div');
   b.className = 'bub';
-  if (isHTML) b.innerHTML = `<span class="typing">${text}</span>`; else b.textContent = text;
+  if (opts.thinking) {
+    b.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+  } else if (opts.html) {
+    b.innerHTML = text;
+  } else {
+    b.textContent = text;
+  }
   el.appendChild(b);
   msgs.appendChild(el);
   scrollBottom();
-  return b.querySelector('.typing') || b;
+  return b;
 }
 function scrollBottom() { requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; }); }
 
@@ -413,7 +420,7 @@ let pendingImage = null, micOn = false, rec = null;
 function toast(msg) {
   const t = document.createElement('div');
   t.textContent = msg;
-  t.style.cssText = 'position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:rgba(17,24,39,.9);color:#fff;padding:9px 14px;border-radius:10px;font-size:13px;z-index:99;max-width:82%;text-align:center';
+  t.style.cssText = 'position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:rgba(17,24,39,.9);color:#fff;padding:9px 14px;border-radius:10px;font-size:13px;z-index:99;max-width:82%;text-align:center;animation:fadeIn .2s ease both';
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 1900);
 }
