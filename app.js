@@ -158,9 +158,12 @@ async function boot() {
 }
 
 function afterBoot() {
-  // 已经有对话内容就不打扰；只在全新空会话里才主动问名字
+  document.querySelector('.hd-title').textContent = name();
+  renderList();
+  const named = !!localStorage.getItem('qz_name');
   const fresh = !state.cur || !state.cur.msgs.length;
-  if (!state.askedName && fresh) setTimeout(() => askName(false), 700);
+  // 只有"从没起过名字"且"全新空对话"时，才主动问一次
+  if (!named && !state.askedName && fresh) setTimeout(() => askName(false), 700);
 }
 
 /* ================= 渲染消息 ================= */
@@ -187,7 +190,8 @@ function renderCur() {
 
 /* ================= AI 主动问名字 ================= */
 function askName(force) {
-  if (!force && localStorage.getItem('qz_asked_name') === '1') return;
+  // 已经起过名字，就绝不再主动问（用户明确反馈过的 bug）
+  if (!force && (localStorage.getItem('qz_asked_name') === '1' || localStorage.getItem('qz_name'))) return;
   showMsgs();
   const cur = localStorage.getItem('qz_name');
   const msg = cur
@@ -300,8 +304,13 @@ function remoteQuery(extra, expectType, ms = 8000) {
   });
 }
 
-// 远程对话。返回 { promise, stop }：每包带 seq 序号按序重组；stop() 通知电脑别再吐字。
-function chatRemote(text, onDelta, image, model, regenerate) {
+// 远程对话。返回 { promise, stop, ctl }。
+//   1) 增量 delta 按 seq 序号重组；
+//   2) 周期性 sync 全量快照：收到就整段替换，自愈乱序/丢包（根治文字错乱）；
+//   3) 空闲超时：只要还在收到包（含电脑心跳）就绝不算超时，
+//      避免电脑明明在跑、手机却误报"电脑没回应"。
+function chatRemote(text, onDelta, onSync, image, model, regenerate) {
+  const ctl = { errored: false };
   let finish;
   const promise = new Promise((resolve, reject) => {
     let done = false;
@@ -310,18 +319,25 @@ function chatRemote(text, onDelta, image, model, regenerate) {
     const buf = new Map();
     let lastProgress = Date.now();
 
-    const cleanup = () => { try { rChannel.off('broadcast', { event: 'chunk' }, on); } catch {} clearInterval(sweeper); clearTimeout(to); };
+    const cleanup = () => { try { rChannel.off('broadcast', { event: 'chunk' }, on); } catch {} clearInterval(sweeper); };
     const done_ = (err) => { if (done) return; done = true; cleanup(); err ? reject(err) : resolve(); };
     finish = done_;
 
     const consume = (payload) => {
       lastProgress = Date.now();
-      if (payload.type === 'session') state.sessionId = payload.sessionId;
-      else if (payload.type === 'delta') onDelta(payload.text || '');
-      else if (payload.type === 'tool_start') onDelta(`\n[电脑执行] ${payload.name}…`);
-      else if (payload.type === 'approval_request') onDelta('\n[需要你在电脑上点一下确认]');
-      else if (payload.type === 'error') { onDelta('\n[电脑端出错] ' + (payload.text || payload.message || '未知错误')); done_(); }
-      else if (payload.type === 'done') done_();
+      const t = payload.type;
+      if (t === 'session') state.sessionId = payload.sessionId;
+      else if (t === 'delta') onDelta(payload.text || '');
+      else if (t === 'sync') onSync(payload.full || '');
+      else if (t === 'tool_start') onDelta(`\n[电脑执行] ${payload.name || '工具'}…\n`);
+      else if (t === 'approval_request') onDelta('\n[需要你在电脑上点一下确认]\n');
+      else if (t === 'error') {
+        if (typeof payload.full === 'string') onSync(payload.full);
+        else onDelta('\n[电脑端出错] ' + (payload.text || payload.message || '未知错误'));
+        ctl.errored = true; done_();
+      }
+      else if (t === 'done') { if (typeof payload.full === 'string') onSync(payload.full); done_(); }
+      // 'progress' 心跳：不做别的，只为刷新 lastProgress（避免误判超时）
     };
     const drain = () => { let p; while ((p = buf.get(nextSeq))) { buf.delete(nextSeq); nextSeq++; consume(p); } };
     const on = ({ payload }) => {
@@ -330,16 +346,19 @@ function chatRemote(text, onDelta, image, model, regenerate) {
       if (s == null) { consume(payload); return; }
       if (s === nextSeq) { nextSeq++; consume(payload); drain(); }
       else if (s > nextSeq) { buf.set(s, payload); }
+      // s < nextSeq：迟到的旧包，丢弃（sync 快照会兜住内容）
     };
     rChannel.on('broadcast', { event: 'chunk' }, on);
 
     const sweeper = setInterval(() => {
+      // 某个包迟迟不到：把已缓冲的按序放出去，别把后面全卡住
       if (buf.size && Date.now() - lastProgress > 1500) {
-        for (const k of [...buf.keys()].sort((a, b) => a - b)) { consume(buf.get(k)); }
+        for (const k of [...buf.keys()].sort((a, b) => a - b)) consume(buf.get(k));
         buf.clear(); lastProgress = Date.now();
       }
+      // 空闲超时：60 秒没收到任何包（含心跳）才认为电脑真的没回应
+      if (Date.now() - lastProgress > 60000) done_(new Error('电脑没回应（可能关机、断网或已关闭远程）'));
     }, 700);
-    const to = setTimeout(() => done_(new Error('电脑没回应（可能关机或已关闭远程）')), 120000);
 
     rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId, text, sessionId: state.sessionId, image, model, regenerate: !!regenerate } })
       .catch(e => done_(e));
@@ -349,7 +368,7 @@ function chatRemote(text, onDelta, image, model, regenerate) {
     try { rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId: chatRemote._reqId, stop: true } }).catch(() => {}); } catch {}
     finish && finish();
   };
-  return { promise, stop };
+  return { promise, stop, ctl };
 }
 
 /* ================= 扫描局域网 ================= */
@@ -435,11 +454,15 @@ async function runChat(text, img, isRegen) {
       if (!acc && !stopped) acc = '(没有回复)';
       paint(); if (acc) { pushAI(acc); persist(); }
     } else {
-      const r = chatRemote(text, d => { acc += d; tickRate(d.length); paint(); }, img, state.model, isRegen);
+      const r = chatRemote(text,
+        d => { acc += d; tickRate(d.length); paint(); },
+        full => { acc = full; paint(); },
+        img, state.model, isRegen);
       remoteStopFn = r.stop;
       await r.promise;
       if (!acc && !stopped) acc = '(电脑没有回复)';
-      paint(); if (acc) { pushAI(acc); persist(); }
+      paint();
+      if (acc && !r.ctl.errored && !stopped) { pushAI(acc); persist(); }
     }
   } catch (e) {
     if (stopped) { if (!acc) { acc = '(已停止)'; paint(); } }
@@ -510,7 +533,14 @@ function sysPrompt() {
   const d = new Date(), p = x => String(x).padStart(2, '0');
   const wk = '日一二三四五六'[d.getDay()];
   const now = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())} 星期${wk}`;
-  return `你叫「${name()}」，是用户自己的私人助手（产品名「轻舟」），直接运行在用户自己的手机 / 电脑上。当前时间：${now}（用户设备的本地时间，被问到现在几点、今天几号就直接用它回答）。\n\n规则：\n1. 说人话，回答简短、具体，不客套、不堆排比、不写小作文。\n2. 你就是「${name()}」，由用户自己部署使用。不要自称其他公司的产品，不要编造自己的开发商、版本号、运行设备型号等你不掌握的信息——被问到就先说不知道，绝不瞎编。\n3. 不要重复用户的话，不要假装自己有实体。\n4. 除非用户要求，不要输出 markdown 标题和大段罗列。`;
+  return `你是「${name()}」，用户自己的私人助手（产品名「轻舟」），直接跑在用户自己的手机 / 电脑上。` +
+    `现在时间：${now}（这是用户设备的本地时间；被问到现在几点、今天几号，直接用它回答，别再说"无法提供实时时间"）。\n\n` +
+    `怎么说话：\n` +
+    `1. 像个靠谱的老朋友——口语、自然、有分寸。不客套、不喊口号、不写小作文、不堆排比句。\n` +
+    `2. 简短优先：先一句话给结论，需要再补细节；一句话能说清就别写三段。\n` +
+    `3. 这是手机屏幕，别输出 markdown 表格、也别用「##」大标题。要分点就用「- 」短横线，一行一条，说人话。\n` +
+    `4. 你就是「${name()}」，由用户自己部署使用。不要自称别的公司的产品，不要编造自己的开发商、版本号、运行设备型号——不知道就直说不知道，绝不瞎编。\n` +
+    `5. 用户让你做什么就直接做，别反复确认；确实缺信息，再简短问一句就行。`;
 }
 
 async function chatCloud(messages, signal) {
@@ -600,6 +630,22 @@ function md(src) {
     if ((m = el.match(/^\s*\d+[.)]\s+(.*)$/))) { if (inList !== 'ol') { flush(); out += '<ol>'; inList = 'ol'; } out += `<li>${mdInline(m[1])}</li>`; i++; continue; }
     if ((m = el.match(/^\s*&gt;\s?(.*)$/))) { flush(); out += `<blockquote>${mdInline(m[1])}</blockquote>`; i++; continue; }
     if (/^\s*(-{3,}|\*{3,})\s*$/.test(el)) { flush(); out += '<hr>'; i++; continue; }
+    // markdown 表格：| 项目 | 配置 |  + 下一行 | --- | --- |
+    if (/^\s*\|.*\|\s*$/.test(el) && i + 1 < lines.length) {
+      const sep = esc(lines[i + 1]);
+      if (/^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(sep) && sep.includes('|')) {
+        flush();
+        const cells = ln => ln.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => mdInline(esc(c.trim())));
+        const head = cells(el);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(cells(esc(lines[i]))); i++; }
+        let t = '<div class="tblwrap"><table class="mdtbl"><thead><tr>' + head.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+        for (const r of rows) t += '<tr>' + head.map((_, k) => `<td>${r[k] || ''}</td>`).join('') + '</tr>';
+        out += t + '</tbody></table></div>';
+        continue;
+      }
+    }
     flush();
     out += `<p>${mdInline(el)}</p>`;
     i++;
@@ -724,6 +770,7 @@ txt.addEventListener('input', () => {
 
 const openSheet = () => {
   $('#ipInput').value = state.ip || '';
+  $('#nameInput').value = localStorage.getItem('qz_name') || '';
   $('#scanLog').textContent = '';
   histLog(''); $('#histList').innerHTML = '';
   renderLocalHistory();
@@ -786,6 +833,18 @@ $('#remoteBtn').onclick = async () => {
 };
 
 $('#histBtn') && ($('#histBtn').onclick = loadPCHistory);
+
+// 手动设置 / 修改助手名字（最确定的一条路，不再依赖"它猜你在起名"）
+$('#nameSaveBtn').onclick = () => {
+  const v = ($('#nameInput').value || '').trim().replace(/[。！？.!?，,、\s]/g, '').slice(0, 8);
+  if (!v) { toast('先填个名字'); return; }
+  localStorage.setItem('qz_name', v);
+  localStorage.setItem('qz_asked_name', '1');
+  document.querySelector('.hd-title').textContent = v;
+  state.awaitName = false;
+  renderList();
+  toast('好，以后就叫「' + v + '」');
+};
 
 /* ================= 语音 / 图片入口 ================= */
 let pendingImage = null, micOn = false, rec = null;
