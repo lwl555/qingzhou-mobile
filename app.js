@@ -16,14 +16,73 @@ const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 // 云端可选模型（走 agnes-proxy）
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
 
-const state = { ip: '', mode: 'cloud', remotePcId: '', sessionId: null, history: [], awaitName: false, askedName: false, cloudModel: '', model: '' };
+const state = {
+  ip: '', mode: 'cloud', remotePcId: '', sessionId: null,
+  awaitName: false, askedName: false, cloudModel: '', model: '',
+  cur: null            // 当前会话 { id, title, updatedAt, msgs:[{role,content}] }
+};
 const $ = s => document.querySelector(s);
 const msgs = $('#msgs'), txt = $('#txt'), wrap = $('#wrap'), empty = $('#empty');
 
 const name = () => localStorage.getItem('qz_name') || '轻舟';
 const greet = () => { const h = new Date().getHours(); return h < 6 ? '凌晨好' : h < 11 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好'; };
 
-/* ---------------- 状态栏（含速率） ---------------- */
+/* ================= 会话存储（本机持久化 —— 解决"历史对话看不到"） ================= */
+const SESS_KEY = 'qz_sessions', CUR_KEY = 'qz_cur';
+function allSessions() {
+  try { const a = JSON.parse(localStorage.getItem(SESS_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function writeSessions(a) { try { localStorage.setItem(SESS_KEY, JSON.stringify(a.slice(0, 40))); } catch {} }
+
+function newSession() {
+  state.cur = {
+    id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    title: '', updatedAt: Date.now(), msgs: []
+  };
+  state.sessionId = null;
+  localStorage.setItem(CUR_KEY, state.cur.id);
+}
+
+// 每轮结束后把当前会话落盘（顺便生成标题）
+function persist() {
+  if (!state.cur) return;
+  state.cur.updatedAt = Date.now();
+  if (!state.cur.title) {
+    const first = (state.cur.msgs.find(m => m.role === 'user') || {}).content || '';
+    state.cur.title = (first || '').replace(/\s+/g, ' ').slice(0, 18) || '(空对话)';
+  }
+  const all = allSessions();
+  const i = all.findIndex(s => s.id === state.cur.id);
+  if (i >= 0) all[i] = state.cur; else all.unshift(state.cur);
+  all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  writeSessions(all);
+  localStorage.setItem(CUR_KEY, state.cur.id);
+}
+
+function loadCur() {
+  const id = localStorage.getItem(CUR_KEY);
+  const s = allSessions().find(x => x.id === id);
+  if (s) { state.cur = s; state.sessionId = null; return; }
+  newSession();
+}
+
+function pushUser(text) { if (text) state.cur.msgs.push({ role: 'user', content: text }); }
+function pushAI(text) { if (text) state.cur.msgs.push({ role: 'assistant', content: text }); }
+
+/* 发送前清洗：丢掉空消息（空消息会让云端直接 400）、合并连续同角色、首条必须是 user */
+function sanitizeHistory(list) {
+  const out = [];
+  for (const m of (list || [])) {
+    const c = typeof m.content === 'string' ? m.content : (m.content == null ? '' : String(m.content));
+    if (!c.trim()) continue;
+    if (out.length && out[out.length - 1].role === m.role) { out[out.length - 1] = { role: m.role, content: c }; continue; }
+    out.push({ role: m.role, content: c });
+  }
+  while (out.length && out[0].role !== 'user') out.shift();
+  return out;
+}
+
+/* ================= 状态栏（含速率） ================= */
 let statLabel = '云端 · 在线模型', statRate = '';
 function setMode(mode, detail) {
   state.mode = mode;
@@ -40,7 +99,7 @@ function renderStat() {
   if (t) t.textContent = statRate ? `${statLabel} · ${statRate}` : statLabel;
 }
 
-/* ---------------- 速率（字数/秒） ---------------- */
+/* ================= 速率（字数/秒） ================= */
 let rateTimer = null, rateStart = 0, rateChars = 0;
 function startRate() { rateStart = Date.now(); rateChars = 0; statRate = ''; if (!rateTimer) rateTimer = setInterval(updateRate, 400); renderStat(); }
 function tickRate(n) { rateChars += n; }
@@ -64,13 +123,16 @@ async function probe(ip, ms = 1500) {
 async function boot() {
   $('#hi').textContent = greet();
   document.querySelector('.hd-title').textContent = name();
-  renderList();
   state.askedName = localStorage.getItem('qz_asked_name') === '1';
   state.ip = localStorage.getItem('qz_ip') || '';
   state.remotePcId = localStorage.getItem('qz_pc') || '';
   state.cloudModel = localStorage.getItem('qz_cloud_model') || '';
   state.model = localStorage.getItem('qz_model') || '';
   if (state.remotePcId) $('#pcIdInput').value = state.remotePcId;
+
+  loadCur();            // 先把上次的对话放出来（不用等联网）
+  renderCur();
+  renderList();
   fillModels();
 
   // 1) 先试局域网
@@ -96,14 +158,102 @@ async function boot() {
 }
 
 function afterBoot() {
-  if (!state.askedName) setTimeout(() => askName(false), 700);
+  // 已经有对话内容就不打扰；只在全新空会话里才主动问名字
+  const fresh = !state.cur || !state.cur.msgs.length;
+  if (!state.askedName && fresh) setTimeout(() => askName(false), 700);
 }
 
-/* ---------------- 远程：通过云端中继操作自己的电脑 ----------------
+/* ================= 渲染消息 ================= */
+function showEmpty() { empty.hidden = false; }
+function hideEmpty() { empty.hidden = true; }
+function showMsgs() { hideEmpty(); }
+
+// 把当前会话的所有消息画到界面上
+function renderCur() {
+  msgs.innerHTML = '';
+  const list = (state.cur && state.cur.msgs) || [];
+  if (!list.length) { showEmpty(); return; }
+  hideEmpty();
+  for (const m of list) {
+    if (m.role === 'user') addMsg('me', m.content);
+    else {
+      const el = addMsg('ai', '');
+      el.querySelector('.bub').innerHTML = md(m.content);
+      addActions(el);
+    }
+  }
+  scrollBottom();
+}
+
+/* ================= AI 主动问名字 ================= */
+function askName(force) {
+  if (!force && localStorage.getItem('qz_asked_name') === '1') return;
+  showMsgs();
+  const cur = localStorage.getItem('qz_name');
+  const msg = cur
+    ? `想换个名字？你想让我叫什么？\n说一个就行，之后我就用新名字自称。`
+    : '我一直还没名字。你想叫我什么？\n说一个就行，之后我就用这个名字自称。';
+  addMsg('ai', msg);
+  pushAI(msg); persist();
+  state.awaitName = true;
+  localStorage.setItem('qz_asked_name', '1');
+  renderList();
+}
+
+function setName(v) {
+  const n = (v || '').trim().replace(/[。！？.!?，,、\s]/g, '').slice(0, 8);
+  const say = t => { addMsg('ai', t); pushAI(t); persist(); };
+  if (/^(随便|随意|你定|你决定|你看着办|都行|都可以|不知道|无所谓|看你)/.test(n)) {
+    say('那我替你想也行。先给个方向：想要短一点的，还是文气一点的？或者江湖气重些？');
+    state.awaitName = true;
+    return false;
+  }
+  if (!n || n.length > 8) {
+    say('两到四个字好记一些。你想叫我什么？');
+    state.awaitName = true;
+    return false;
+  }
+  localStorage.setItem('qz_name', n);
+  document.querySelector('.hd-title').textContent = n;
+  const ok = `好，以后我就叫「${n}」。\n要改名随时说一句「改个名字」。`;
+  say(ok);
+  renderList();
+  state.awaitName = false;
+  return true;
+}
+
+/* ================= 首屏示例 ================= */
+function renderList() {
+  const named = !!localStorage.getItem('qz_name');
+  const ex = [
+    named
+      ? { t: `换个名字`, s: `现在是「${name()}」`, act: 'name' }
+      : { t: `给${name()}起个名字`, s: '它会主动问你', act: 'name' },
+    { t: '盯着一个网页的价格', s: '降价了提醒我', q: '帮我盯着这个网页的价格，降价了告诉我：' },
+    { t: '把这段话改专业点', s: '贴进来即可', q: '把下面这段话改得更专业：\n' },
+    { t: '搜一下最新消息', s: '联网查', q: '帮我联网搜一下最新的：' }
+  ];
+  const box = $('#list');
+  box.className = 'chips';
+  box.innerHTML = '';
+  for (const it of ex) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.innerHTML = `<span class="ct">${it.t}</span><span class="cs">${it.s}</span>`;
+    b.onclick = () => {
+      if (it.act === 'name') { askName(true); return; }
+      txt.value = it.q;
+      txt.dispatchEvent(new Event('input'));
+      send();
+    };
+    box.appendChild(b);
+  }
+}
+
+/* ================= 远程：通过云端中继操作自己的电脑 ================
    电脑端必须先打开「远程操作」开关并建立通道，手机才连得上；关掉就连不上。 */
 let rClient = null, rChannel = null, rMeta = null, pendingPong = null;
 
-// 电脑端回的元信息：pong（在线确认 + 可用模型）
 function onRemoteMeta({ payload }) {
   if (!payload) return;
   if (payload.type === 'pong') { rMeta = payload; if (pendingPong) { pendingPong(payload); pendingPong = null; } }
@@ -136,7 +286,6 @@ async function remoteConnect(pcId) {
   return pong;
 }
 
-// 一次性向电脑查询（列会话 / 读某个会话）
 function remoteQuery(extra, expectType, ms = 8000) {
   return new Promise((resolve, reject) => {
     const reqId = Math.random().toString(36).slice(2);
@@ -151,9 +300,7 @@ function remoteQuery(extra, expectType, ms = 8000) {
   });
 }
 
-// 远程对话。返回 { promise, stop }：
-//  - 每个包带 seq 序号，按序重组（Supabase 广播不保证顺序，以前文字错乱就出在这）；
-//  - stop() 让手机立刻停下，并通知电脑别再吐字。
+// 远程对话。返回 { promise, stop }：每包带 seq 序号按序重组；stop() 通知电脑别再吐字。
 function chatRemote(text, onDelta, image, model, regenerate) {
   let finish;
   const promise = new Promise((resolve, reject) => {
@@ -180,14 +327,12 @@ function chatRemote(text, onDelta, image, model, regenerate) {
     const on = ({ payload }) => {
       if (!payload || payload.reqId !== reqId) return;
       const s = typeof payload.seq === 'number' ? payload.seq : null;
-      if (s == null) { consume(payload); return; }        // 老版本电脑端没序号，直接显示
+      if (s == null) { consume(payload); return; }
       if (s === nextSeq) { nextSeq++; consume(payload); drain(); }
-      else if (s > nextSeq) { buf.set(s, payload); }      // 先到的等一等
-      // s < nextSeq：迟到/重复，丢弃
+      else if (s > nextSeq) { buf.set(s, payload); }
     };
     rChannel.on('broadcast', { event: 'chunk' }, on);
 
-    // 兜底：万一某个包丢了导致卡住，1.5 秒没进展就按现有顺序强行冲出
     const sweeper = setInterval(() => {
       if (buf.size && Date.now() - lastProgress > 1500) {
         for (const k of [...buf.keys()].sort((a, b) => a - b)) { consume(buf.get(k)); }
@@ -198,7 +343,6 @@ function chatRemote(text, onDelta, image, model, regenerate) {
 
     rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId, text, sessionId: state.sessionId, image, model, regenerate: !!regenerate } })
       .catch(e => done_(e));
-    // 供「停止」用
     chatRemote._reqId = reqId;
   });
   const stop = () => {
@@ -208,61 +352,7 @@ function chatRemote(text, onDelta, image, model, regenerate) {
   return { promise, stop };
 }
 
-/* ---------------- 首屏列表 ---------------- */
-function renderList() {
-  const ex = [
-    { t: `给${name()}起个名字`, s: '它会主动问你', act: 'name' },
-    { t: '盯着一个网页的价格', s: '降价了提醒我', q: '帮我盯着这个网页的价格，降价了告诉我：' },
-    { t: '把这段话改专业点', s: '贴进来即可', q: '把下面这段话改得更专业：\n' },
-    { t: '搜一下最新消息', s: '联网查', q: '帮我联网搜一下最新的：' }
-  ];
-  const box = $('#list');
-  box.className = 'chips';
-  box.innerHTML = '';
-  for (const it of ex) {
-    const b = document.createElement('button');
-    b.className = 'chip';
-    b.innerHTML = `<span class="ct">${it.t}</span><span class="cs">${it.s}</span>`;
-    b.onclick = () => {
-      if (it.act === 'name') { askName(true); return; }
-      txt.value = it.q;
-      txt.dispatchEvent(new Event('input'));
-      send();
-    };
-    box.appendChild(b);
-  }
-}
-
-/* ---------------- AI 主动问名字 ---------------- */
-function askName(force) {
-  if (!force && localStorage.getItem('qz_asked_name') === '1') return;
-  showMsgs();
-  addMsg('ai', '我一直还没名字。你想叫我什么？\n说一个就行，之后我就用这个名字自称。');
-  state.awaitName = true;
-  localStorage.setItem('qz_asked_name', '1');
-}
-
-function setName(v) {
-  const n = (v || '').trim().replace(/[。！？.!?，,、\s]/g, '').slice(0, 8);
-  if (/^(随便|随意|你定|你决定|你看着办|都行|都可以|不知道|无所谓|看你)/.test(n)) {
-    addMsg('ai', '那我替你想也行。先给个方向：想要短一点的，还是文气一点的？或者江湖气重些？');
-    state.awaitName = true;
-    return false;
-  }
-  if (!n || n.length > 8) {
-    addMsg('ai', '两到四个字好记一些。你想叫我什么？');
-    state.awaitName = true;
-    return false;
-  }
-  localStorage.setItem('qz_name', n);
-  document.querySelector('.hd-title').textContent = n;
-  renderList();
-  addMsg('ai', `好，以后我就叫「${n}」。\n要改名随时说一句「改个名字」。`);
-  state.awaitName = false;
-  return true;
-}
-
-/* ---------------- 扫描局域网 ---------------- */
+/* ================= 扫描局域网 ================= */
 async function scanLAN() {
   const log = $('#scanLog');
   const guess = (state.ip || localStorage.getItem('qz_ip') || '192.168.1.1').split('.').slice(0, 3).join('.');
@@ -287,7 +377,7 @@ async function scanLAN() {
   }
 }
 
-/* ---------------- 发消息 ---------------- */
+/* ================= 发消息 ================= */
 let streaming = false, streamStop = null, lastUserText = '';
 
 async function send() {
@@ -298,9 +388,20 @@ async function send() {
   txt.value = '';
   txt.style.height = 'auto';
   $('#send').classList.remove('on');
+
+  // 正在起名字：把输入当名字处理
+  if (state.awaitName && text) {
+    showMsgs(); addMsg('me', text); clearAttach(); setName(text); return;
+  }
+  // 明确的改名意图
+  if (text && /^(改|换)(个|一下)?名字$|^重命名$|^换个名字吧?$/.test(text)) {
+    showMsgs(); addMsg('me', text); clearAttach(); setTimeout(() => askName(true), 150); return;
+  }
+
   showMsgs();
   addMsg('me', text || '（图片）');
-  if (state.awaitName && text) { setName(text); clearAttach(); return; }
+  if (img && state.mode === 'cloud') toast('云端看不了图片，这条只发文字；连上电脑才能发图');
+  pushUser(text);                 // 图不发空文本，避免污染历史
   lastUserText = text;
   await runChat(text, img, false);
 }
@@ -320,27 +421,29 @@ async function runChat(text, img, isRegen) {
   const paint = () => { bub.innerHTML = md(acc); scrollBottom(); };
 
   try {
-    if (state.mode === 'lan') {
+    if (state.mode === 'cloud') {
+      if (img && !text) {
+        // 云端看不了图；绝不发空消息出去（那会 400 并污染历史）
+        acc = '（云端模型看不了图片。连上电脑后，可以把图发给电脑上的模型识别。）';
+        paint(); pushAI(acc); persist();
+      } else {
+        acc = await chatCloud(sanitizeHistory(state.cur.msgs), ctl.signal);
+        paint(); pushAI(acc); persist();
+      }
+    } else if (state.mode === 'lan') {
       await chatLan(text, d => { acc += d; tickRate(d.length); paint(); }, img, ctl.signal, isRegen);
-      if (!acc && !stopped) bub.textContent = '(没有回复)';
-    } else if (state.mode === 'remote') {
+      if (!acc && !stopped) acc = '(没有回复)';
+      paint(); if (acc) { pushAI(acc); persist(); }
+    } else {
       const r = chatRemote(text, d => { acc += d; tickRate(d.length); paint(); }, img, state.model, isRegen);
       remoteStopFn = r.stop;
       await r.promise;
-      if (!acc && !stopped) bub.textContent = '(电脑没有回复)';
-    } else {
-      if (img) addMsg('ai', '（云端模型暂不支持图片，已用文字回复；连上电脑后可发图）');
-      if (!isRegen) state.history.push({ role: 'user', content: text });
-      const reply = await chatCloud(state.history, ctl.signal);
-      acc = reply || '';
-      bub.innerHTML = md(acc);
-      if (!state.history.length || state.history[state.history.length - 1].role !== 'assistant') state.history.push({ role: 'assistant', content: reply });
-      else state.history[state.history.length - 1].content = reply;
-      if (state.history.length > 20) state.history = state.history.slice(-20);
+      if (!acc && !stopped) acc = '(电脑没有回复)';
+      paint(); if (acc) { pushAI(acc); persist(); }
     }
   } catch (e) {
-    if (stopped) { if (!acc) bub.textContent = '(已停止)'; }
-    else bub.innerHTML = md('出错：' + e.message);
+    if (stopped) { if (!acc) { acc = '(已停止)'; paint(); } }
+    else { acc = '出错：' + e.message; paint(); }   // 出错只显示，不写进历史（免得脏数据又被发出去）
   }
   stopRate();
   if (!stopped) addActions(el);
@@ -363,10 +466,10 @@ function clearAttach() { pendingImage = null; const a = $('#attachBar'); if (a) 
 /* 重新生成：删掉这条 AI 回复，用上一次的提问重来 */
 function regenerate(aiEl) {
   if (!lastUserText || streaming) return;
-  const h = state.history;
-  if (state.mode !== 'cloud' && state.mode !== 'lan') { /* 远程：电脑端没有 regenerate，直接重发 */ }
+  const h = state.cur.msgs;
   if (h.length && h[h.length - 1].role === 'assistant') h.pop();
   aiEl.remove();
+  persist();
   runChat(lastUserText, null, true);
 }
 
@@ -402,22 +505,41 @@ async function chatLan(text, onDelta, image, signal, regenerate) {
   }
 }
 
-async function chatCloud(messages, signal) {
-  const r = await fetch(CLOUD.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
-    body: JSON.stringify({
-      model: state.cloudModel || CLOUD.model,
-      messages: [{ role: 'system', content: `你是${name()}，一个简洁实用的中文助手。回答要短、要具体，不说客套话。` }, ...messages]
-    }),
-    signal
-  });
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j) throw new Error('云端没响应（' + r.status + '）');
-  return j?.choices?.[0]?.message?.content || j?.error?.message || '(没有回复)';
+/* 云端：注入身份 + 当前时间，并禁止编造自己的来历/设备 */
+function sysPrompt() {
+  const d = new Date(), p = x => String(x).padStart(2, '0');
+  const wk = '日一二三四五六'[d.getDay()];
+  const now = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())} 星期${wk}`;
+  return `你叫「${name()}」，是用户自己的私人助手（产品名「轻舟」），直接运行在用户自己的手机 / 电脑上。当前时间：${now}（用户设备的本地时间，被问到现在几点、今天几号就直接用它回答）。\n\n规则：\n1. 说人话，回答简短、具体，不客套、不堆排比、不写小作文。\n2. 你就是「${name()}」，由用户自己部署使用。不要自称其他公司的产品，不要编造自己的开发商、版本号、运行设备型号等你不掌握的信息——被问到就先说不知道，绝不瞎编。\n3. 不要重复用户的话，不要假装自己有实体。\n4. 除非用户要求，不要输出 markdown 标题和大段罗列。`;
 }
 
-/* ---------------- 模型选择 ---------------- */
+async function chatCloud(messages, signal) {
+  const hist = sanitizeHistory(messages);
+  if (!hist.length) return '(没有可发送的内容)';
+  let r;
+  try {
+    r = await fetch(CLOUD.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+      body: JSON.stringify({
+        model: state.cloudModel || CLOUD.model,
+        messages: [{ role: 'system', content: sysPrompt() }, ...hist]
+      }),
+      signal
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    throw new Error('连不上云端（' + (e.message || '网络错误') + '）');
+  }
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j) {
+    const detail = j?.error?.message || j?.message || '';
+    throw new Error('云端没响应（' + r.status + '）' + (detail ? '：' + String(detail).slice(0, 140) : ''));
+  }
+  return j?.choices?.[0]?.message?.content || '(没有回复)';
+}
+
+/* ================= 模型选择 ================= */
 function fillModels() {
   const sel = $('#modelSel'); if (!sel) return;
   const hasRemote = state.mode === 'remote' && rMeta && rMeta.models && rMeta.models.length;
@@ -442,7 +564,7 @@ function fillModels() {
   if (!sel.value && sel.options[0]) sel.value = sel.options[0].value;
 }
 
-/* ---------------- Markdown 渲染（安全：先转义再套格式） ---------------- */
+/* ================= Markdown 渲染（安全：先转义再套格式） ================= */
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function mdInline(s) {
   const stash = [];
@@ -486,9 +608,7 @@ function md(src) {
   return out;
 }
 
-/* ---------------- 渲染 ---------------- */
-function showMsgs() { empty.hidden = true; }
-
+/* ================= DOM 渲染 ================= */
 function addMsg(who, text, opts) {
   opts = opts || {};
   const el = document.createElement('div');
@@ -504,7 +624,6 @@ function addMsg(who, text, opts) {
   return el;
 }
 
-// AI 消息下方的操作：复制 / 重新生成
 function addActions(el) {
   if (!el || el.querySelector('.mact')) return;
   const bar = document.createElement('div');
@@ -524,11 +643,38 @@ function addActions(el) {
 
 function scrollBottom() { requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; }); }
 
-/* ---------------- 电脑上的历史会话 ---------------- */
+/* ================= 历史对话（本机 + 电脑） ================= */
 function histLog(s) { const e = $('#histLog'); if (e) e.textContent = s || ''; }
+const fmtTime = ts => { const t = new Date(ts || Date.now()); return `${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
 
-async function loadHistory() {
-  if (state.mode !== 'remote') { histLog('只有在远程连上电脑后，才能读电脑上的会话。'); return; }
+function renderLocalHistory() {
+  const box = $('#localList'); if (!box) return;
+  const all = allSessions();
+  box.innerHTML = '';
+  if (!all.length) { box.innerHTML = '<div class="histempty">还没有历史对话</div>'; return; }
+  for (const s of all) {
+    const b = document.createElement('button');
+    b.className = 'histitem' + (state.cur && s.id === state.cur.id ? ' cur' : '');
+    b.innerHTML = `<span class="ht">${esc(s.title || '(空对话)')}</span><span class="hs">${(s.msgs || []).length} 条 · ${fmtTime(s.updatedAt)}</span>`;
+    b.onclick = () => openLocalSession(s.id);
+    box.appendChild(b);
+  }
+}
+
+function openLocalSession(id) {
+  if (streaming) return;
+  persist();
+  const s = allSessions().find(x => x.id === id);
+  if (!s) return;
+  state.cur = s; state.sessionId = null;
+  localStorage.setItem(CUR_KEY, s.id);
+  renderCur(); renderList();
+  $('#sheet').hidden = true;
+  toast('已打开：' + (s.title || '对话'));
+}
+
+async function loadPCHistory() {
+  if (state.mode !== 'remote') { histLog('只有远程连上电脑后，才能读电脑上的会话。'); return; }
   histLog('正在读取电脑上的会话…');
   try {
     const r = await remoteQuery({ cmd: 'list_sessions' }, 'sessions');
@@ -539,38 +685,35 @@ async function loadHistory() {
     for (const s of list.slice(0, 60)) {
       const b = document.createElement('button');
       b.className = 'histitem';
-      const t = new Date(s.updatedAt || Date.now());
-      const when = `${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
-      b.innerHTML = `<span class="ht">${esc(s.title || '(无标题)')}</span><span class="hs">${s.count || 0} 条 · ${when}</span>`;
-      b.onclick = () => openHistorySession(s.id, s.title);
+      b.innerHTML = `<span class="ht">${esc(s.title || '(无标题)')}</span><span class="hs">${s.count || 0} 条 · ${fmtTime(s.updatedAt)}</span>`;
+      b.onclick = () => openPCSession(s.id, s.title);
       box.appendChild(b);
     }
   } catch (e) { histLog('读取失败：' + e.message); }
 }
 
-async function openHistorySession(id, title) {
+async function openPCSession(id, title) {
   histLog('正在打开…');
   try {
     const r = await remoteQuery({ cmd: 'open_session', sessionId: id }, 'session_data');
-    showMsgs();
-    msgs.innerHTML = '';
-    state.sessionId = id;
-    const tip = addMsg('ai', '');
-    tip.querySelector('.bub').innerHTML = md(`**（电脑上的会话：${esc(title || '')}）**`);
+    // 把电脑上的会话落到本机（当作一条本机会话，之后也能翻）
+    newSession();
+    const tip = { role: 'assistant', content: `（从电脑打开的会话：${title || ''}）` };
+    state.cur.msgs.push(tip);
     for (const m of (r.messages || [])) {
       if (m.role === 'system' || m.role === 'tool') continue;
-      if (m.role === 'user') addMsg('me', typeof m.content === 'string' ? m.content : '');
-      else if (m.role === 'assistant' && m.content) {
-        const el = addMsg('ai', '');
-        el.querySelector('.bub').innerHTML = md(String(m.content));
-      }
+      if (typeof m.content !== 'string' || !m.content.trim()) continue;
+      state.cur.msgs.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content });
     }
+    state.sessionId = id;
+    persist();
+    renderCur();
     $('#sheet').hidden = true;
-    scrollBottom();
+    toast('已打开电脑上的会话');
   } catch (e) { histLog('打开失败：' + e.message); }
 }
 
-/* ---------------- 绑定 ---------------- */
+/* ================= 绑定 ================= */
 $('#send').onclick = () => { if (streaming) { streamStop && streamStop(); return; } send(); };
 txt.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').click(); } });
 txt.addEventListener('input', () => {
@@ -578,10 +721,31 @@ txt.addEventListener('input', () => {
   txt.style.height = Math.min(txt.scrollHeight, 110) + 'px';
   $('#send').classList.toggle('on', !!txt.value.trim());
 });
-const openSheet = () => { $('#ipInput').value = state.ip || ''; $('#scanLog').textContent = ''; histLog(''); $('#sheet').hidden = false; };
+
+const openSheet = () => {
+  $('#ipInput').value = state.ip || '';
+  $('#scanLog').textContent = '';
+  histLog(''); $('#histList').innerHTML = '';
+  renderLocalHistory();
+  $('#sheet').hidden = false;
+};
 $('#cfgBtn').onclick = openSheet;
 $('#closeSheet').onclick = () => { $('#sheet').hidden = true; };
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') $('#sheet').hidden = true; });
+
+// 新对话
+$('#newBtn').onclick = () => {
+  if (streaming) { toast('等这句说完再开新对话'); return; }
+  if (!state.cur.msgs.length) { toast('这已经是新对话了'); return; }
+  persist();
+  newSession();
+  msgs.innerHTML = '';
+  $('#hi').textContent = greet();
+  renderList();
+  showEmpty();
+  txt.focus();
+  toast('已开新对话');
+};
 
 $('#saveBtn').onclick = async () => {
   const ip = $('#ipInput').value.trim();
@@ -621,9 +785,9 @@ $('#remoteBtn').onclick = async () => {
   }
 };
 
-$('#histBtn') && ($('#histBtn').onclick = loadHistory);
+$('#histBtn') && ($('#histBtn').onclick = loadPCHistory);
 
-/* ---------------- 语音 / 图片入口 ---------------- */
+/* ================= 语音 / 图片入口 ================= */
 let pendingImage = null, micOn = false, rec = null;
 
 function toast(msg) {
@@ -657,7 +821,7 @@ $('#fileInput').onchange = e => {
     const a = document.createElement('div');
     a.className = 'attach';
     a.id = 'attachBar';
-    a.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">附图：${f.name}</span><button class="x" id="attX" type="button">×</button>`;
+    a.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">附图：${esc(f.name)}</span><button class="x" id="attX" type="button">×</button>`;
     const c = document.querySelector('.composer');
     if (c) c.before(a);
     $('#attX').onclick = () => { pendingImage = null; a.remove(); };

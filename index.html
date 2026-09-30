@@ -15,6 +15,7 @@
     <div class="hd-title">轻舟</div>
     <div class="hd-sub"><span class="dot" id="dot"></span><span id="statText">检测中…</span></div>
   </div>
+  <button class="hd-btn" id="newBtn" aria-label="新对话">新对话</button>
   <button class="hd-btn" id="cfgBtn">连接</button>
 </header>
 
@@ -65,9 +66,13 @@
     <p class="tip" id="modelTip">云端模式用在线模型；连上电脑后可用你电脑上的模型。</p>
     <select id="modelSel"></select>
 
-    <h3 style="margin-top:18px">电脑上的会话</h3>
-    <p class="tip">远程连上电脑后，可以在这里读电脑上存的历史对话，点一条就在上面打开。</p>
-    <button id="histBtn" style="width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:9px;padding:11px;font-size:14px;min-height:44px">读取电脑上的会话</button>
+    <h3 style="margin-top:18px">历史对话</h3>
+    <p class="tip">你在手机上的对话都存在本机，点一条就能接着聊。</p>
+    <div class="histlist" id="localList"></div>
+
+    <h3 style="margin-top:16px">电脑上的会话</h3>
+    <p class="tip">远程连上电脑后，可以读电脑上存的历史对话，点一条就在上面打开。</p>
+    <button id="histBtn" class="ghostbtn">读取电脑上的会话</button>
     <div class="scanlog" id="histLog"></div>
     <div class="histlist" id="histList"></div>
 

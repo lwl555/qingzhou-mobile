@@ -28,7 +28,7 @@ body{background:var(--bg);color:var(--ink);
 .dot.lan{background:var(--ok)}
 .dot.cloud{background:var(--brand)}
 .hd-btn{flex:none;border:1px solid var(--line);background:#fff;color:var(--ink);
-  border-radius:8px;padding:7px 12px;font-size:13px;min-height:34px}
+  border-radius:8px;padding:7px 10px;font-size:12.5px;min-height:34px;white-space:nowrap}
 .hd-btn:active{background:#f3f4f6}
 
 /* ---------- 内容区 ---------- */
@@ -121,13 +121,18 @@ body{background:var(--bg);color:var(--ink);
 .row button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
 .scanlog{font-size:12px;color:var(--gray);margin-top:9px;min-height:16px;line-height:1.6}
 
-/* 电脑上的会话列表 */
-.histlist{max-height:220px;overflow-y:auto;border-top:1px solid var(--line);margin-top:6px}
+/* 会话列表（本机 + 电脑） */
+.histlist{max-height:200px;overflow-y:auto;border-top:1px solid var(--line);margin-top:6px}
 .histitem{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;border:none;
   border-bottom:1px solid var(--line);background:#fff;padding:11px 2px;font:inherit;color:var(--ink)}
 .histitem:active{background:#f9fafb}
+.histitem.cur{background:#f5f7ff}
 .histitem .ht{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .histitem .hs{font-size:11.5px;color:var(--gray2)}
+.histempty{padding:12px 2px;font-size:12.5px;color:var(--gray2)}
+.ghostbtn{width:100%;border:1px solid var(--line);background:#fff;color:var(--ink);
+  border-radius:9px;padding:11px;font-size:14px;min-height:44px;margin-top:2px}
+.ghostbtn:active{background:#f3f4f6}
 .tip2{margin:11px 0 0;font-size:11.5px;color:var(--gray2);line-height:1.6}
 .close{width:100%;border:none;background:none;color:var(--gray);padding:12px;font-size:14px}
 
