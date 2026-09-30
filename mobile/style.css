@@ -72,6 +72,15 @@ body{background:var(--bg);color:var(--ink);
 .msg.me .bub code{background:rgba(255,255,255,.22);color:#fff}
 .msg.me .bub a{color:#fff;text-decoration:underline}
 
+/* 消息里的 markdown 表格：手机窄屏 → 可横向滚动 + 紧凑 */
+.bub .tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:8px 0;border:1px solid var(--line);border-radius:8px}
+.bub table.mdtbl{border-collapse:collapse;width:100%;font-size:13px}
+.bub table.mdtbl th,.bub table.mdtbl td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+.bub table.mdtbl th{background:#f7f8fa;font-weight:600;white-space:nowrap}
+.bub table.mdtbl tr:last-child td{border-bottom:none}
+.bub table.mdtbl th:last-child,.bub table.mdtbl td:last-child{border-right:none}
+.msg.me .bub .tblwrap{border-color:rgba(255,255,255,.35)}
+
 /* AI 消息下方的小操作（复制 / 重新生成） */
 .mact{display:flex;gap:14px;margin:0 2px}
 .mact button{border:none;background:none;color:var(--gray2);font:inherit;font-size:12px;padding:0}
