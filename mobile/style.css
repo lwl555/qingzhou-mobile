@@ -81,6 +81,12 @@ body{background:var(--bg);color:var(--ink);
 .sheet-box input{width:100%;border:1px solid var(--line);border-radius:9px;padding:11px 12px;
   font-size:16px;outline:none;margin-bottom:10px;background:#fff;color:var(--ink)}
 .sheet-box input:focus{border-color:var(--brand)}
+.sheet-box select{width:100%;border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+  font-size:15px;background:#fff;color:var(--ink);outline:none;margin-bottom:10px;
+  -webkit-appearance:none;appearance:none;background-image:linear-gradient(45deg,transparent 50%,#9ca3af 50%),linear-gradient(135deg,#9ca3af 50%,transparent 50%);
+  background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.sheet-box select:focus{border-color:var(--brand)}
+.sheet-box select:disabled{color:var(--gray2);background:#f9fafb}
 .row{display:flex;gap:10px}
 .row button{flex:1;border:1px solid var(--line);background:#fff;color:var(--ink);
   border-radius:9px;padding:11px;font-size:14px;min-height:44px}
@@ -88,3 +94,24 @@ body{background:var(--bg);color:var(--ink);
 .scanlog{font-size:12px;color:var(--gray);margin-top:9px;min-height:16px;line-height:1.6}
 .tip2{margin:11px 0 0;font-size:11.5px;color:var(--gray2);line-height:1.6}
 .close{width:100%;border:none;background:none;color:var(--gray);padding:12px;font-size:14px}
+
+/* 空状态示例引导（学千问/元宝：首屏给可点的问题） */
+.chips{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
+.chip{text-align:left;border:1px solid var(--line);background:#fff;border-radius:10px;
+  padding:11px 12px;font:inherit;color:var(--ink);min-height:64px;display:flex;flex-direction:column;gap:3px}
+.chip:active{background:#f9fafb;border-color:var(--brand)}
+.chip .ct{font-size:13.5px;font-weight:500}
+.chip .cs{font-size:11.5px;color:var(--gray2);line-height:1.45}
+.privacy{margin:18px 2px 0;font-size:11.5px;color:var(--gray2);line-height:1.6}
+
+/* 输入区圆形图标按钮（语音 / 加图） */
+.composer .ic{width:40px;height:40px;flex:none;border:1px solid var(--line);background:#fff;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--gray);padding:0}
+.composer .ic:active{background:#f3f4f6}
+.composer .ic.on{color:var(--brand);border-color:var(--brand)}
+.composer .ic svg{width:19px;height:19px;display:block}
+
+/* 图片附件提示条 */
+.attach{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--line);
+  background:#f9fafb;font-size:12.5px;color:var(--gray)}
+.attach .x{border:none;background:none;color:var(--gray2);font-size:16px;line-height:1;padding:0 2px;flex:none}
