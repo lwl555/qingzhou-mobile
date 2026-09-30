@@ -23,15 +23,33 @@ const msgs = $('#msgs'), txt = $('#txt'), wrap = $('#wrap'), empty = $('#empty')
 const name = () => localStorage.getItem('qz_name') || '轻舟';
 const greet = () => { const h = new Date().getHours(); return h < 6 ? '凌晨好' : h < 11 ? '早上好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好'; };
 
-/* ---------------- 连接状态 ---------------- */
+/* ---------------- 状态栏（含速率） ---------------- */
+let statLabel = '云端 · 在线模型', statRate = '';
 function setMode(mode, detail) {
   state.mode = mode;
-  const dot = $('#dot'), t = $('#statText');
+  const dot = $('#dot');
   dot.className = 'dot ' + (mode === 'cloud' ? 'cloud' : 'lan');
-  if (mode === 'lan') t.textContent = `局域网 · 用你电脑本地模型`;
-  else if (mode === 'remote') t.textContent = `远程 · 已连电脑（在线）`;
-  else t.textContent = detail || '云端 · 在线模型';
+  statLabel = mode === 'lan' ? '局域网 · 用你电脑本地模型'
+    : mode === 'remote' ? '远程 · 已连电脑（在线）'
+      : (detail || '云端 · 在线模型');
+  statRate = '';
+  renderStat();
 }
+function renderStat() {
+  const t = $('#statText');
+  if (t) t.textContent = statRate ? `${statLabel} · ${statRate}` : statLabel;
+}
+
+/* ---------------- 速率（字数/秒） ---------------- */
+let rateTimer = null, rateStart = 0, rateChars = 0;
+function startRate() { rateStart = Date.now(); rateChars = 0; statRate = ''; if (!rateTimer) rateTimer = setInterval(updateRate, 400); renderStat(); }
+function tickRate(n) { rateChars += n; }
+function updateRate() {
+  if (!rateStart) return;
+  const s = (Date.now() - rateStart) / 1000;
+  if (s >= 0.4) { statRate = `${Math.round(rateChars / s)} 字/秒`; renderStat(); }
+}
+function stopRate() { if (rateTimer) { clearInterval(rateTimer); rateTimer = null; } rateStart = 0; }
 
 async function probe(ip, ms = 1500) {
   const ctrl = new AbortController();
@@ -133,24 +151,61 @@ function remoteQuery(extra, expectType, ms = 8000) {
   });
 }
 
-function chatRemote(text, onDelta, image, model) {
-  return new Promise((resolve, reject) => {
+// 远程对话。返回 { promise, stop }：
+//  - 每个包带 seq 序号，按序重组（Supabase 广播不保证顺序，以前文字错乱就出在这）；
+//  - stop() 让手机立刻停下，并通知电脑别再吐字。
+function chatRemote(text, onDelta, image, model, regenerate) {
+  let finish;
+  const promise = new Promise((resolve, reject) => {
+    let done = false;
     const reqId = Math.random().toString(36).slice(2);
-    const onChunk = ({ payload }) => {
-      if (!payload || payload.reqId !== reqId) return;
+    let nextSeq = 0;
+    const buf = new Map();
+    let lastProgress = Date.now();
+
+    const cleanup = () => { try { rChannel.off('broadcast', { event: 'chunk' }, on); } catch {} clearInterval(sweeper); clearTimeout(to); };
+    const done_ = (err) => { if (done) return; done = true; cleanup(); err ? reject(err) : resolve(); };
+    finish = done_;
+
+    const consume = (payload) => {
+      lastProgress = Date.now();
       if (payload.type === 'session') state.sessionId = payload.sessionId;
       else if (payload.type === 'delta') onDelta(payload.text || '');
       else if (payload.type === 'tool_start') onDelta(`\n[电脑执行] ${payload.name}…`);
       else if (payload.type === 'approval_request') onDelta('\n[需要你在电脑上点一下确认]');
-      else if (payload.type === 'error') { onDelta('\n[电脑端出错] ' + (payload.text || payload.message || '未知错误')); cleanup(); resolve(); }
-      else if (payload.type === 'done') { cleanup(); resolve(); }
+      else if (payload.type === 'error') { onDelta('\n[电脑端出错] ' + (payload.text || payload.message || '未知错误')); done_(); }
+      else if (payload.type === 'done') done_();
     };
-    const cleanup = () => { try { rChannel.off('broadcast', { event: 'chunk' }, onChunk); } catch {} };
-    rChannel.on('broadcast', { event: 'chunk' }, onChunk);
-    rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId, text, sessionId: state.sessionId, image, model } })
-      .catch(e => { cleanup(); reject(e); });
-    setTimeout(() => { cleanup(); reject(new Error('电脑没回应（可能关机或已关闭远程）')); }, 120000);
+    const drain = () => { let p; while ((p = buf.get(nextSeq))) { buf.delete(nextSeq); nextSeq++; consume(p); } };
+    const on = ({ payload }) => {
+      if (!payload || payload.reqId !== reqId) return;
+      const s = typeof payload.seq === 'number' ? payload.seq : null;
+      if (s == null) { consume(payload); return; }        // 老版本电脑端没序号，直接显示
+      if (s === nextSeq) { nextSeq++; consume(payload); drain(); }
+      else if (s > nextSeq) { buf.set(s, payload); }      // 先到的等一等
+      // s < nextSeq：迟到/重复，丢弃
+    };
+    rChannel.on('broadcast', { event: 'chunk' }, on);
+
+    // 兜底：万一某个包丢了导致卡住，1.5 秒没进展就按现有顺序强行冲出
+    const sweeper = setInterval(() => {
+      if (buf.size && Date.now() - lastProgress > 1500) {
+        for (const k of [...buf.keys()].sort((a, b) => a - b)) { consume(buf.get(k)); }
+        buf.clear(); lastProgress = Date.now();
+      }
+    }, 700);
+    const to = setTimeout(() => done_(new Error('电脑没回应（可能关机或已关闭远程）')), 120000);
+
+    rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId, text, sessionId: state.sessionId, image, model, regenerate: !!regenerate } })
+      .catch(e => done_(e));
+    // 供「停止」用
+    chatRemote._reqId = reqId;
   });
+  const stop = () => {
+    try { rChannel.send({ type: 'broadcast', event: 'cmd', payload: { reqId: chatRemote._reqId, stop: true } }).catch(() => {}); } catch {}
+    finish && finish();
+  };
+  return { promise, stop };
 }
 
 /* ---------------- 首屏列表 ---------------- */
@@ -159,7 +214,7 @@ function renderList() {
     { t: `给${name()}起个名字`, s: '它会主动问你', act: 'name' },
     { t: '盯着一个网页的价格', s: '降价了提醒我', q: '帮我盯着这个网页的价格，降价了告诉我：' },
     { t: '把这段话改专业点', s: '贴进来即可', q: '把下面这段话改得更专业：\n' },
-    { t: '列个本周周报提纲', s: '直接生成', q: '帮我列一份本周工作周报提纲，分 3 点。' }
+    { t: '搜一下最新消息', s: '联网查', q: '帮我联网搜一下最新的：' }
   ];
   const box = $('#list');
   box.className = 'chips';
@@ -233,7 +288,10 @@ async function scanLAN() {
 }
 
 /* ---------------- 发消息 ---------------- */
+let streaming = false, streamStop = null, lastUserText = '';
+
 async function send() {
+  if (streaming) return;
   const text = txt.value.trim();
   if (!text && !pendingImage) return;
   const img = pendingImage;
@@ -243,41 +301,84 @@ async function send() {
   showMsgs();
   addMsg('me', text || '（图片）');
   if (state.awaitName && text) { setName(text); clearAttach(); return; }
+  lastUserText = text;
+  await runChat(text, img, false);
+}
 
-  const bub = addMsg('ai', '', { thinking: true });
+async function runChat(text, img, isRegen) {
+  streaming = true;
+  setBusy(true);
+  startRate();
+  let stopped = false;
+  const ctl = new AbortController();
+  let remoteStopFn = null;
+  streamStop = () => { stopped = true; try { ctl.abort(); } catch {} if (remoteStopFn) remoteStopFn(); };
+
+  const el = addMsg('ai', '', { thinking: true });
+  const bub = el.querySelector('.bub');
+  let acc = '';
+  const paint = () => { bub.innerHTML = md(acc); scrollBottom(); };
+
   try {
     if (state.mode === 'lan') {
-      let first = true;
-      await chatLan(text, d => { if (first) { bub.textContent = ''; first = false; } bub.textContent += d; }, img);
-      if (first) bub.textContent = '(没有回复)';
+      await chatLan(text, d => { acc += d; tickRate(d.length); paint(); }, img, ctl.signal, isRegen);
+      if (!acc && !stopped) bub.textContent = '(没有回复)';
     } else if (state.mode === 'remote') {
-      let first = true;
-      await chatRemote(text, d => { if (first) { bub.textContent = ''; first = false; } bub.textContent += d; }, img, state.model);
-      if (first) bub.textContent = '(电脑没有回复)';
+      const r = chatRemote(text, d => { acc += d; tickRate(d.length); paint(); }, img, state.model, isRegen);
+      remoteStopFn = r.stop;
+      await r.promise;
+      if (!acc && !stopped) bub.textContent = '(电脑没有回复)';
     } else {
       if (img) addMsg('ai', '（云端模型暂不支持图片，已用文字回复；连上电脑后可发图）');
-      state.history.push({ role: 'user', content: text });
-      const reply = await chatCloud(state.history);
-      bub.textContent = reply || '(没有回复)';
-      state.history.push({ role: 'assistant', content: reply });
+      if (!isRegen) state.history.push({ role: 'user', content: text });
+      const reply = await chatCloud(state.history, ctl.signal);
+      acc = reply || '';
+      bub.innerHTML = md(acc);
+      if (!state.history.length || state.history[state.history.length - 1].role !== 'assistant') state.history.push({ role: 'assistant', content: reply });
+      else state.history[state.history.length - 1].content = reply;
       if (state.history.length > 20) state.history = state.history.slice(-20);
     }
   } catch (e) {
-    bub.textContent = '出错：' + e.message;
+    if (stopped) { if (!acc) bub.textContent = '(已停止)'; }
+    else bub.innerHTML = md('出错：' + e.message);
   }
+  stopRate();
+  if (!stopped) addActions(el);
+  streaming = false;
+  setBusy(false);
+  streamStop = null;
   clearAttach();
   scrollBottom();
 }
 
+function setBusy(on) {
+  const s = $('#send');
+  if (!s) return;
+  s.classList.toggle('stop', on);
+  s.textContent = on ? '停止' : '发送';
+}
+
 function clearAttach() { pendingImage = null; const a = $('#attachBar'); if (a) a.remove(); }
 
-async function chatLan(text, onDelta, image) {
+/* 重新生成：删掉这条 AI 回复，用上一次的提问重来 */
+function regenerate(aiEl) {
+  if (!lastUserText || streaming) return;
+  const h = state.history;
+  if (state.mode !== 'cloud' && state.mode !== 'lan') { /* 远程：电脑端没有 regenerate，直接重发 */ }
+  if (h.length && h[h.length - 1].role === 'assistant') h.pop();
+  aiEl.remove();
+  runChat(lastUserText, null, true);
+}
+
+async function chatLan(text, onDelta, image, signal, regenerate) {
   const body = { text, sessionId: state.sessionId };
   if (image) body.image = image;
+  if (regenerate) body.regenerate = true;
   const r = await fetch(`http://${state.ip}:${PORT}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
   if (!r.ok || !r.body) throw new Error('电脑没响应（' + r.status + '）');
   const reader = r.body.getReader();
@@ -301,14 +402,15 @@ async function chatLan(text, onDelta, image) {
   }
 }
 
-async function chatCloud(messages) {
+async function chatCloud(messages, signal) {
   const r = await fetch(CLOUD.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
     body: JSON.stringify({
       model: state.cloudModel || CLOUD.model,
       messages: [{ role: 'system', content: `你是${name()}，一个简洁实用的中文助手。回答要短、要具体，不说客套话。` }, ...messages]
-    })
+    }),
+    signal
   });
   const j = await r.json().catch(() => null);
   if (!r.ok || !j) throw new Error('云端没响应（' + r.status + '）');
@@ -340,6 +442,50 @@ function fillModels() {
   if (!sel.value && sel.options[0]) sel.value = sel.options[0].value;
 }
 
+/* ---------------- Markdown 渲染（安全：先转义再套格式） ---------------- */
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function mdInline(s) {
+  const stash = [];
+  const keep = html => { stash.push(html); return `\u0000${stash.length - 1}\u0000`; };
+  s = s.replace(/`([^`]+)`/g, (_, c) => keep(`<code>${c}</code>`));
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_, t, u) => keep(`<a href="${u}" target="_blank" rel="noreferrer">${t}</a>`));
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/(^|\s)\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/(https?:\/\/[^\s<)]+)/g, (_, u) => keep(`<a href="${u}" target="_blank" rel="noreferrer">${u}</a>`));
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[+i]);
+}
+function md(src) {
+  const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
+  let out = '', inList = null;
+  const flush = () => { if (inList) { out += `</${inList}>`; inList = null; } };
+  let i = 0;
+  while (i < lines.length) {
+    const raw = lines[i];
+    const fence = raw.match(/^\s*```(\w*)\s*$/);
+    if (fence) {
+      flush();
+      const buf = []; i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      out += `<pre class="code">${esc(buf.join('\n'))}</pre>`;
+      continue;
+    }
+    const el = esc(raw);
+    if (!el.trim()) { flush(); i++; continue; }
+    let m;
+    if ((m = el.match(/^(#{1,4})\s+(.*)$/))) { flush(); out += `<h${m[1].length + 2}>${mdInline(m[2])}</h${m[1].length + 2}>`; i++; continue; }
+    if ((m = el.match(/^\s*[-*+]\s+(.*)$/))) { if (inList !== 'ul') { flush(); out += '<ul>'; inList = 'ul'; } out += `<li>${mdInline(m[1])}</li>`; i++; continue; }
+    if ((m = el.match(/^\s*\d+[.)]\s+(.*)$/))) { if (inList !== 'ol') { flush(); out += '<ol>'; inList = 'ol'; } out += `<li>${mdInline(m[1])}</li>`; i++; continue; }
+    if ((m = el.match(/^\s*&gt;\s?(.*)$/))) { flush(); out += `<blockquote>${mdInline(m[1])}</blockquote>`; i++; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(el)) { flush(); out += '<hr>'; i++; continue; }
+    flush();
+    out += `<p>${mdInline(el)}</p>`;
+    i++;
+  }
+  flush();
+  return out;
+}
+
 /* ---------------- 渲染 ---------------- */
 function showMsgs() { empty.hidden = true; }
 
@@ -349,29 +495,90 @@ function addMsg(who, text, opts) {
   el.className = 'msg ' + who;
   const b = document.createElement('div');
   b.className = 'bub';
-  if (opts.thinking) {
-    b.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
-  } else if (opts.html) {
-    b.innerHTML = text;
-  } else {
-    b.textContent = text;
-  }
+  if (opts.thinking) b.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+  else if (opts.html) b.innerHTML = text;
+  else b.textContent = text;
   el.appendChild(b);
   msgs.appendChild(el);
   scrollBottom();
-  return b;
+  return el;
 }
+
+// AI 消息下方的操作：复制 / 重新生成
+function addActions(el) {
+  if (!el || el.querySelector('.mact')) return;
+  const bar = document.createElement('div');
+  bar.className = 'mact';
+  const cp = document.createElement('button');
+  cp.type = 'button'; cp.textContent = '复制';
+  cp.onclick = () => {
+    const t = el.querySelector('.bub').innerText;
+    try { navigator.clipboard.writeText(t); toast('已复制'); } catch { toast('复制失败'); }
+  };
+  const rg = document.createElement('button');
+  rg.type = 'button'; rg.textContent = '重新生成';
+  rg.onclick = () => regenerate(el);
+  bar.appendChild(cp); bar.appendChild(rg);
+  el.appendChild(bar);
+}
+
 function scrollBottom() { requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; }); }
 
+/* ---------------- 电脑上的历史会话 ---------------- */
+function histLog(s) { const e = $('#histLog'); if (e) e.textContent = s || ''; }
+
+async function loadHistory() {
+  if (state.mode !== 'remote') { histLog('只有在远程连上电脑后，才能读电脑上的会话。'); return; }
+  histLog('正在读取电脑上的会话…');
+  try {
+    const r = await remoteQuery({ cmd: 'list_sessions' }, 'sessions');
+    const list = r.list || [];
+    if (!list.length) { histLog('电脑上还没有会话。'); return; }
+    histLog('');
+    const box = $('#histList'); box.innerHTML = '';
+    for (const s of list.slice(0, 60)) {
+      const b = document.createElement('button');
+      b.className = 'histitem';
+      const t = new Date(s.updatedAt || Date.now());
+      const when = `${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+      b.innerHTML = `<span class="ht">${esc(s.title || '(无标题)')}</span><span class="hs">${s.count || 0} 条 · ${when}</span>`;
+      b.onclick = () => openHistorySession(s.id, s.title);
+      box.appendChild(b);
+    }
+  } catch (e) { histLog('读取失败：' + e.message); }
+}
+
+async function openHistorySession(id, title) {
+  histLog('正在打开…');
+  try {
+    const r = await remoteQuery({ cmd: 'open_session', sessionId: id }, 'session_data');
+    showMsgs();
+    msgs.innerHTML = '';
+    state.sessionId = id;
+    const tip = addMsg('ai', '');
+    tip.querySelector('.bub').innerHTML = md(`**（电脑上的会话：${esc(title || '')}）**`);
+    for (const m of (r.messages || [])) {
+      if (m.role === 'system' || m.role === 'tool') continue;
+      if (m.role === 'user') addMsg('me', typeof m.content === 'string' ? m.content : '');
+      else if (m.role === 'assistant' && m.content) {
+        const el = addMsg('ai', '');
+        el.querySelector('.bub').innerHTML = md(String(m.content));
+      }
+    }
+    $('#sheet').hidden = true;
+    scrollBottom();
+  } catch (e) { histLog('打开失败：' + e.message); }
+}
+
 /* ---------------- 绑定 ---------------- */
-$('#send').onclick = send;
-txt.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+$('#send').onclick = () => { if (streaming) { streamStop && streamStop(); return; } send(); };
+txt.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#send').click(); } });
 txt.addEventListener('input', () => {
   txt.style.height = 'auto';
   txt.style.height = Math.min(txt.scrollHeight, 110) + 'px';
   $('#send').classList.toggle('on', !!txt.value.trim());
 });
-const openSheet = () => { $('#ipInput').value = state.ip || ''; $('#scanLog').textContent = ''; $('#sheet').hidden = false; };
+const openSheet = () => { $('#ipInput').value = state.ip || ''; $('#scanLog').textContent = ''; histLog(''); $('#sheet').hidden = false; };
 $('#cfgBtn').onclick = openSheet;
 $('#closeSheet').onclick = () => { $('#sheet').hidden = true; };
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') $('#sheet').hidden = true; });
@@ -413,6 +620,8 @@ $('#remoteBtn').onclick = async () => {
     $('#scanLog').textContent = '连不上：' + e.message;
   }
 };
+
+$('#histBtn') && ($('#histBtn').onclick = loadHistory);
 
 /* ---------------- 语音 / 图片入口 ---------------- */
 let pendingImage = null, micOn = false, rec = null;

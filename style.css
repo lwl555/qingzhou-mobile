@@ -49,11 +49,33 @@ body{background:var(--bg);color:var(--ink);
 .item .go{color:var(--gray2);font-size:15px;flex:none}
 
 /* 消息气泡 */
-.msg{display:flex}
-.msg.me{justify-content:flex-end}
+.msg{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.msg.me{align-items:flex-end}
 .bub{max-width:82%;padding:10px 13px;border-radius:4px;background:var(--bub);
   white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.7}
 .msg.me .bub{background:var(--brand);color:#fff}
+
+/* AI 气泡里的轻量 markdown 排版（不引入任何花哨样式） */
+.bub p{margin:0 0 8px}
+.bub p:last-child{margin-bottom:0}
+.bub ul,.bub ol{margin:6px 0;padding-left:20px}
+.bub li{margin:2px 0}
+.bub h3,.bub h4,.bub h5,.bub h6{margin:8px 0 4px;font-size:15px;line-height:1.5}
+.bub code{background:#eceef2;padding:1px 5px;border-radius:4px;font-size:13px;
+  font-family:ui-monospace,Consolas,"Courier New",monospace}
+.bub pre.code{background:#f6f7f9;border:1px solid var(--line);padding:10px 12px;border-radius:8px;
+  overflow:auto;font-size:12.5px;line-height:1.6;margin:6px 0}
+.bub pre.code code{background:none;padding:0}
+.bub blockquote{border-left:3px solid var(--line);margin:6px 0;padding:2px 10px;color:var(--gray)}
+.bub a{color:var(--brand);word-break:break-all}
+.bub hr{border:none;border-top:1px solid var(--line);margin:8px 0}
+.msg.me .bub code{background:rgba(255,255,255,.22);color:#fff}
+.msg.me .bub a{color:#fff;text-decoration:underline}
+
+/* AI 消息下方的小操作（复制 / 重新生成） */
+.mact{display:flex;gap:14px;margin:0 2px}
+.mact button{border:none;background:none;color:var(--gray2);font:inherit;font-size:12px;padding:0}
+.mact button:active{color:var(--brand)}
 /* 思考中：三点跳动（替代原来死的"处理中…"，更有"活气"但不花哨） */
 .typing{display:inline-flex;gap:4px;align-items:center;height:18px}
 .typing i{width:6px;height:6px;border-radius:50%;background:var(--gray2);display:inline-block;animation:dotB .9s infinite ease-in-out}
@@ -74,6 +96,7 @@ body{background:var(--bg);color:var(--ink);
   border-radius:20px;padding:0 18px;min-height:40px;font-size:14px}
 .send:active{background:#f3f4f6}
 .send.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.send.stop{background:#fff;border-color:var(--brand);color:var(--brand)}
 
 /* ---------- 底部抽屉 ---------- */
 .sheet{position:fixed;inset:0;background:rgba(17,24,39,.35);display:flex;align-items:flex-end;z-index:50}
@@ -97,6 +120,14 @@ body{background:var(--bg);color:var(--ink);
   border-radius:9px;padding:11px;font-size:14px;min-height:44px}
 .row button.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
 .scanlog{font-size:12px;color:var(--gray);margin-top:9px;min-height:16px;line-height:1.6}
+
+/* 电脑上的会话列表 */
+.histlist{max-height:220px;overflow-y:auto;border-top:1px solid var(--line);margin-top:6px}
+.histitem{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;border:none;
+  border-bottom:1px solid var(--line);background:#fff;padding:11px 2px;font:inherit;color:var(--ink)}
+.histitem:active{background:#f9fafb}
+.histitem .ht{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.histitem .hs{font-size:11.5px;color:var(--gray2)}
 .tip2{margin:11px 0 0;font-size:11.5px;color:var(--gray2);line-height:1.6}
 .close{width:100%;border:none;background:none;color:var(--gray);padding:12px;font-size:14px}
 
