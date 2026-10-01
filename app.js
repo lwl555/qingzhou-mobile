@@ -1,4 +1,4 @@
-/* 轻舟手机版 v1.16
+/* 轻舟手机版 v1.21
    三种连接，按优先级自动选：
      1) 局域网 lan   ：手机和电脑同一 Wi-Fi → 直连 http://<电脑IP>:8787
      2) 远程   remote：电脑开了「远程操作」→ 走云端中继，在外面也能操作自己电脑
@@ -13,6 +13,54 @@ const CLOUD = {
 };
 const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
+// 代理根地址（去掉 chat 后缀）：图片/视频/轮询都走这里，密钥由代理保管
+const CLOUD_API = CLOUD.url.replace(/\/v1\/chat\/completions$/, '');
+const GEN = { imageModel: 'agnes-image-2.5-flash', videoModel: 'agnes-video-2.5-flash' };
+
+// 云端图片生成：返回图片 URL
+async function createImage(prompt) {
+  const r = await fetch(CLOUD_API + '/v1/images/generations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+    body: JSON.stringify({ model: GEN.imageModel, prompt, n: 1 })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j) throw new Error('图片生成失败（' + r.status + '）' + (j?.error?.message || ''));
+  const url = j?.data?.[0]?.url;
+  if (!url) throw new Error('图片生成未返回地址');
+  return url;
+}
+
+// 云端视频生成：异步任务，轮询直到完成，返回视频 URL
+async function createVideo(prompt, onStatus) {
+  const model = GEN.videoModel;
+  const r = await fetch(CLOUD_API + '/v1/videos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+    body: JSON.stringify({ model, prompt, mode: 'text', seconds: '5', aspect_ratio: '16:9' })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j) throw new Error('视频任务创建失败（' + r.status + '）' + (j?.error?.message || ''));
+  const vid = j?.video_id || j?.task_id || j?.id;
+  if (!vid) throw new Error('视频任务未返回 ID');
+  const deadline = Date.now() + 4 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise(res => setTimeout(res, 4000));
+    const pr = await fetch(CLOUD_API + '/agnesapi?video_id=' + encodeURIComponent(vid) + '&model_name=' + encodeURIComponent(model), {
+      headers: { Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key }
+    });
+    const pj = await pr.json().catch(() => null);
+    const st = pj?.status;
+    if (onStatus) onStatus(pj?.progress || 0, st);
+    if (st === 'completed') {
+      const url = pj?.metadata?.url;
+      if (!url) throw new Error('视频完成但未返回地址');
+      return url;
+    }
+    if (st === 'failed') throw new Error('视频生成失败：' + (pj?.error?.message || pj?.message || '未知'));
+  }
+  throw new Error('视频生成超时（超过 4 分钟）');
+}
 
 const state = {
   ip: '', mode: 'cloud', remotePcId: '', sessionId: null,
@@ -204,9 +252,22 @@ function renderCur() {
   for (const m of list) {
     if (m.role === 'user') addMsg('me', m.content);
     else {
-      const el = addMsg('ai', '');
-      el.querySelector('.bub').innerHTML = md(m.content);
-      addActions(el);
+      const c = m.content || '';
+      if (c.startsWith('[media:image]')) {
+        const url = c.slice('[media:image]'.length);
+        const el = addMsg('ai', '');
+        el.querySelector('.bub').innerHTML = `<img class="media" src="${esc(url)}" alt="生成图片">`;
+        addActions(el);
+      } else if (c.startsWith('[media:video]')) {
+        const url = c.slice('[media:video]'.length);
+        const el = addMsg('ai', '');
+        el.querySelector('.bub').innerHTML = `<video class="media" src="${esc(url)}" controls></video>`;
+        addActions(el);
+      } else {
+        const el = addMsg('ai', '');
+        el.querySelector('.bub').innerHTML = md(m.content);
+        addActions(el);
+      }
     }
   }
   scrollBottom();
@@ -1000,6 +1061,36 @@ function stopVoice() {
 
 $('#micBtn').onclick = startVoice;
 $('#attBtn').onclick = () => $('#fileInput').click();
+// 生成面板：云端图片/视频（密钥走代理 agnes-proxy，前端只发描述）
+$('#genBtn').onclick = () => { const p = $('#genPanel'); p.hidden = !p.hidden; if (!p.hidden) $('#genPrompt').focus(); };
+$('#genClose').onclick = () => { $('#genPanel').hidden = true; };
+document.querySelectorAll('.gentab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.gentab').forEach(x => x.classList.remove('on'));
+  t.classList.add('on'); state.genType = t.dataset.type;
+});
+$('#genRun').onclick = async () => {
+  const prompt = $('#genPrompt').value.trim();
+  if (!prompt) { toast('先描述想要的内容'); return; }
+  $('#genPanel').hidden = true; $('#genPrompt').value = '';
+  showMsgs();
+  const type = state.genType || 'image';
+  const label = type === 'image' ? '生成图片' : '生成视频';
+  addMsg('me', label + '：' + prompt); pushUser(label + '：' + prompt);
+  const el = addMsg('ai', '', { thinking: true });
+  const bub = el.querySelector('.bub');
+  try {
+    if (type === 'image') {
+      const url = await createImage(prompt);
+      state.cur.msgs.push({ role: 'assistant', content: '[media:image]' + url });
+      bub.innerHTML = `<img class="media" src="${esc(url)}" alt="生成图片">`;
+    } else {
+      const url = await createVideo(prompt, (p, st) => { bub.innerHTML = `<span class="typing"><i></i><i></i><i></i></span> 生成中 ${p || 0}%${st ? '（' + st + '）' : ''}`; });
+      state.cur.msgs.push({ role: 'assistant', content: '[media:video]' + url });
+      bub.innerHTML = `<video class="media" src="${esc(url)}" controls></video>`;
+    }
+    addActions(el); persist();
+  } catch (e) { bub.textContent = '生成出错：' + e.message; addActions(el); }
+};
 $('#fileInput').onchange = e => {
   const f = e.target.files && e.target.files[0];
   if (!f) return;
