@@ -188,10 +188,9 @@ async function boot() {
 function afterBoot() {
   document.querySelector('.hd-title').textContent = name();
   renderList();
+  renderNameEntry();
   maybeOnboard();
-  const named = !!localStorage.getItem('qz_name');
-  const fresh = !state.cur || !state.cur.msgs.length;
-  if (!named && !state.askedName && fresh) setTimeout(() => askName(false), 900);
+  // 起名不再自动弹大气泡——欢迎区有「起名入口卡」，用户点了才问
 }
 
 /* ================= 渲染消息 ================= */
@@ -213,14 +212,14 @@ function renderCur() {
   scrollBottom();
 }
 
-/* ================= AI 主动问名字 ================= */
+/* ================= 起名（欢迎区入口触发，不再大气泡霸屏） ================= */
 function askName(force) {
   if (!force && (localStorage.getItem('qz_asked_name') === '1' || localStorage.getItem('qz_name'))) return;
   showMsgs();
   const cur = localStorage.getItem('qz_name');
   const msg = cur
-    ? `想换个名字？你想让我叫什么？\n说一个就行，之后我就用新名字自称。`
-    : '我一直还没名字。你想叫我什么？\n说一个就行，之后我就用这个名字自称。';
+    ? `想让我改叫啥？说一个，我马上换。`
+    : `我还没名字呢，你给起一个呗？两三个字顺口就行。`;
   addMsg('ai', msg);
   pushAI(msg); persist();
   state.awaitName = true;
@@ -235,13 +234,21 @@ function setName(v) {
     state.awaitName = true; return false;
   }
   if (!n || n.length > 8) {
-    say('两到四个字好记一些。你想叫我什么？');
+    say('太长啦，两到四个字顺口。再想一个？');
     state.awaitName = true; return false;
   }
   localStorage.setItem('qz_name', n);
   document.querySelector('.hd-title').textContent = n;
-  const ok = `好，以后我就叫「${n}」。\n要改名随时说一句「改个名字」。`;
-  say(ok); renderList(); state.awaitName = false; return true;
+  const ok = `成，以后我就叫「${n}」了。\n想改随时说声「改个名字」。`;
+  say(ok); renderList(); renderNameEntry(); state.awaitName = false; return true;
+}
+// 欢迎区的起名入口卡：未命名时显示
+function renderNameEntry() {
+  const card = $('#nameEntry');
+  if (!card) return;
+  const named = !!localStorage.getItem('qz_name');
+  card.hidden = named;
+  if (!named) card.textContent = '✍️ 还没名字 · 点一下给 TA 起一个';
 }
 
 /* ================= 首屏示例 + 灵感 ================= */
@@ -250,7 +257,7 @@ function renderList() {
   const ex = [
     named
       ? { t: `换个名字`, s: `现在是「${name()}」`, act: 'name' }
-      : { t: `给${name()}起个名字`, s: '它会主动问你', act: 'name' },
+      : { t: `连上电脑`, s: '局域网或远程都行', act: 'connect' },
     { t: '查商品现价比价', s: '联网查 · 当场出结果', q: '帮我联网查一下这个商品现在的价格：' },
     { t: '把这段话改专业点', s: '贴进来即可', q: '把下面这段话改得更专业：\n' },
     { t: '搜一下最新消息', s: '联网查', q: '帮我联网搜一下最新的：' }
@@ -264,6 +271,7 @@ function renderList() {
     b.innerHTML = `<span class="ct">${it.t}</span><span class="cs">${it.s}</span>`;
     b.onclick = () => {
       if (it.act === 'name') { askName(true); return; }
+      if (it.act === 'connect') { switchTab('connect'); return; }
       switchTab('chat');
       txt.value = it.q; txt.dispatchEvent(new Event('input')); send();
     };
@@ -368,7 +376,7 @@ function remoteQuery(extra, expectType, ms = 8000) {
     setTimeout(() => { try { rChannel.off('broadcast', { event: 'chunk' }, on); } catch {} reject(new Error('电脑没回应')); }, ms);
   });
 }
-function chatRemote(text, onDelta, onSync, image, model, regenerate) {
+function chatRemote(text, onDelta, onSync, image, model, regenerate, onStep) {
   const ctl = { errored: false };
   let finish;
   const promise = new Promise((resolve, reject) => {
@@ -386,7 +394,8 @@ function chatRemote(text, onDelta, onSync, image, model, regenerate) {
       if (t === 'session') state.sessionId = payload.sessionId;
       else if (t === 'delta') onDelta(payload.text || '');
       else if (t === 'sync') onSync(payload.full || '');
-      else if (t === 'tool_start') onDelta(`\n[电脑执行] ${payload.name || '工具'}…\n`);
+      else if (t === 'tool_start') { if (onStep) onStep(payload.name || '工具', 'run', payload.preview || ''); }
+      else if (t === 'tool_result') { if (onStep) onStep(payload.name || '工具', 'done', payload.summary || '', payload.ok); }
       else if (t === 'approval_request') onDelta('\n[需要你在电脑上点一下确认]\n');
       else if (t === 'error') {
         if (typeof payload.full === 'string') onSync(payload.full);
@@ -496,10 +505,30 @@ async function runChat(text, img, isRegen) {
       if (!acc && !stopped) acc = '(没有回复)';
       paint(); if (acc) { pushAI(acc); persist(); }
     } else {
+      // 流程卡：电脑端每执行一个工具，就在 AI 消息下方实时显示"工具名 + 执行中/结果摘要"
+      let stepCard = null;
+      const onStep = (name, st, summary, ok) => {
+        if (!stepCard || !stepCard.isConnected) {
+          stepCard = document.createElement('div');
+          stepCard.className = 'stepcard';
+          el.after(stepCard);
+        }
+        let row = stepCard.querySelector(`[data-n="${CSS.escape(name)}"]`);
+        if (!row) {
+          row = document.createElement('div');
+          row.className = 'step';
+          row.dataset.n = name;
+          row.innerHTML = `<span class="si">⚙️</span><span class="sn">${esc(name)}</span><span class="ss">执行中…</span>`;
+          stepCard.appendChild(row);
+        }
+        const si = row.querySelector('.si'), ss = row.querySelector('.ss');
+        if (st === 'run') { row.classList.add('running'); si.textContent = '⚙️'; ss.textContent = summary ? `执行中 · ${summary}` : '执行中…'; }
+        else { row.classList.remove('running'); si.textContent = ok === false ? '⚠️' : '✅'; ss.textContent = ok === false ? `失败 · ${summary || '出错了'}` : (summary || '完成'); }
+      };
       const r = chatRemote(text,
         d => { acc += d; tickRate(d.length); paint(); },
         full => { acc = full; paint(); },
-        img, state.model, isRegen);
+        img, state.model, isRegen, onStep);
       remoteStopFn = r.stop;
       await r.promise;
       if (!acc && !stopped) acc = '(电脑没有回复)';
@@ -571,8 +600,9 @@ function sysPrompt() {
     + `4. 你就是「${name()}」，由用户自己部署。不要自称别的公司的产品，不要编造开发商、版本号、设备型号——不知道就直说。\n`
     + `5. 主动理解：用户说的不清、缺信息时，先简短反问一句最关键的（一次一个问题，别连珠炮），而不是瞎猜或干等。\n`
     + `6. 给完方案顺手给"下一步可以做什么"（1-2 条），让用户少想一步；但别啰嗦。\n`
-    + `7. 用户让你做就直接做，别反复确认；只有涉及花钱、发消息、删东西这类才先问一句。\n`
-    + `8. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。`;
+    + `7. 接到多步骤的活，先用一行说清"我打算分几步"，再逐步给结果——让人知道进展到哪了，而不是闷头憋大招。\n`
+    + `8. 用户让你做就直接做，别反复确认；只有涉及花钱、发消息、删东西这类才先问一句。\n`
+    + `9. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。`;
 }
 async function chatCloud(messages, signal, image) {
   const hist = sanitizeHistory(messages);
@@ -879,6 +909,11 @@ async function startVoice() {
   const CapSR = window.Capacitor?.Plugins?.SpeechRecognition;
   if (CapSR) {
     try {
+      // 前置检测：部分国产系统（vivo/OPPO 等）没有预装语音识别服务，权限过了也起不来
+      try {
+        const av = await CapSR.available();
+        if (av && av.available === false) { micUnavailable(); return; }
+      } catch {}
       const perm = await CapSR.requestPermissions();
       const ok = perm && (perm.speechRecognition === 'granted' || perm.microphone === 'granted' || perm.recognition === 'granted');
       if (!ok) { toast('需要先允许麦克风权限'); return; }
@@ -895,21 +930,27 @@ async function startVoice() {
     } catch (e) {
       micOn = false; setMicOn(false);
       if (micListener) { try { await micListener.remove(); } catch {} micListener = null; }
-      if (/permission|权限/i.test(e.message || '')) toast('麦克风权限被拒绝，去系统设置里允许');
-      else toast('语音识别没启动：' + (e.message || '未知错误'));
+      const msg = e.message || '';
+      if (/permission|权限/i.test(msg)) toast('麦克风权限被拒绝，去系统设置里允许');
+      else if (/not available|service/i.test(msg)) micUnavailable();
+      else toast('语音识别没启动：' + msg);
     }
     return;
   }
   // 回退：Web Speech API（PWA / 桌面浏览器）
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { toast('当前环境不支持语音，打字也行'); return; }
+  if (!SR) { micUnavailable(); return; }
   rec = new SR();
   rec.lang = 'zh-CN'; rec.interimResults = true; rec.continuous = false;
   rec.onresult = e => { let s = ''; for (const r of e.results) s += r[0].transcript; txt.value = s; txt.dispatchEvent(new Event('input')); };
   rec.onend = () => { micOn = false; setMicOn(false); };
-  rec.onerror = e => { micOn = false; setMicOn(false); if (e.error === 'not-allowed') toast('麦克风权限被拒绝'); };
+  rec.onerror = e => { micOn = false; setMicOn(false); if (e.error === 'not-allowed') toast('麦克风权限被拒绝'); if (e.error === 'service-not-allowed') micUnavailable(); };
   micOn = true; setMicOn(true);
   try { rec.start(); } catch { micOn = false; setMicOn(false); }
+}
+// 这台设备没有可用的语音识别服务：给明确指引，别让用户看英文报错发懵
+function micUnavailable() {
+  toast('这台手机的系统没带语音识别服务（部分国产手机如此）。可以用输入法自带的语音键说话，或直接打字。');
 }
 function stopVoice() {
   try { if (window.Capacitor?.Plugins?.SpeechRecognition) window.Capacitor.Plugins.SpeechRecognition.stop(); } catch {}
@@ -1003,8 +1044,9 @@ $('#nameSaveBtn').onclick = () => {
   localStorage.setItem('qz_asked_name', '1');
   document.querySelector('.hd-title').textContent = v;
   state.awaitName = false;
-  renderList();
+  renderList(); renderNameEntry();
   toast('好，以后就叫「' + v + '」');
 };
+$('#nameEntry').onclick = () => { switchTab('chat'); setTimeout(() => askName(true), 150); };
 
 boot();

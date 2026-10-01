@@ -11,10 +11,9 @@
 <body>
 
 <header class="hd">
-  <div class="hd-txt" style="flex:1;min-width:0">
-    <div class="hd-title">轻舟</div>
-    <div class="hd-sub"><span class="dot" id="dot"></span><span id="statText">检测中…</span></div>
-  </div>
+  <span class="dot" id="dot"></span>
+  <span class="hd-title" id="hdName">轻舟</span>
+  <span class="hd-sub" id="statText">检测中…</span>
   <button class="hd-btn" id="newBtn" aria-label="新对话">新对话</button>
 </header>
 
@@ -27,8 +26,14 @@
     <div class="wrap" id="wrap">
       <div class="empty" id="empty">
         <div class="hi" id="hi">你好</div>
-        <p class="hi-sub">在家连你电脑用本地模型，出门自动走云端。</p>
+        <p class="hi-sub" id="hiSub">在家连你电脑用本地模型，出门自动走云端。</p>
+        <div class="feat3">
+          <div class="feat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg><span>语音说话</span></div>
+          <div class="feat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>连电脑干活</span></div>
+          <div class="feat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0 0-9 6 6 0 1 0-11.7 2"/><path d="M12 12v9M8 17l4 4 4-4"/></svg><span>云端在线</span></div>
+        </div>
         <div class="chips" id="list"></div>
+        <button class="namecard" id="nameEntry" hidden></button>
         <p class="privacy">数据默认留在本机，连不上电脑才走云端。连上电脑还能用本地文件、直接操作桌面。</p>
       </div>
       <div class="msgs" id="msgs"></div>
