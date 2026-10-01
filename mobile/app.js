@@ -1179,4 +1179,116 @@ $('#nameSaveBtn').onclick = () => {
 };
 $('#nameEntry').onclick = () => { switchTab('chat'); setTimeout(() => askName(true), 150); };
 
+/* ================= 主动找我：推送订阅 + 轮询兜底 =================
+   两条路都走，谁先用上算谁的：
+   1) Web Push：浏览器 / 加到主屏幕后，App 关着也能收到（安卓 Chrome、iOS 16.4+ 支持）。
+   2) 轮询：APK 内置的 WebView 里 Web Push 通常不可用，就靠每分钟查一次到期提醒，
+      App 开着（含后台）时弹通知。 */
+const PUSH = {
+  vapid: 'BCUf47GTpILOh890wwy7L3IJAKA2u7SyEf0I-27W_NuQgQFPHUS1bZwT0DRPxEl5hsMcYj3wD31vdexPvFsILys',
+  fn: 'https://wcnssyiqitugqfmcbdhe.functions.supabase.co/push-send'
+};
+function deviceId() {
+  let id = localStorage.getItem('qz_device');
+  if (!id) { id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem('qz_device', id); }
+  return id;
+}
+function b64urlToU8(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+function pushLog(s) { const e = $('#pushLog'); if (e) e.textContent = s || ''; }
+function sbClient() {
+  if (!window.supabase) throw new Error('云端组件没加载（网络不通）');
+  return window.supabase.createClient(SB.url, SB.key, { auth: { persistSession: false } });
+}
+
+async function pushState() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+  const reg = await navigator.serviceWorker.getRegistration().catch(() => null);
+  if (!reg) return 'off';
+  const sub = await reg.pushManager.getSubscription().catch(() => null);
+  if (!sub) return 'off';
+  return Notification.permission === 'granted' ? 'on' : 'blocked';
+}
+
+async function enablePush() {
+  pushLog('正在开启…');
+  try {
+    const reg = await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { pushLog('你没允许通知权限，推不了。'); return false; }
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: b64urlToU8(PUSH.vapid)
+      });
+    }
+    const j = sub.toJSON();
+    const { error } = await sbClient().from('qz_push_subs').upsert({
+      device: deviceId(), endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth
+    }, { onConflict: 'endpoint' });
+    if (error) throw new Error(error.message);
+    localStorage.setItem('qz_push', '1');
+    pushLog('已开启。轻舟现在可以在 App 关着的时候找你了。');
+    return true;
+  } catch (e) { pushLog('开启失败：' + e.message); return false; }
+}
+
+async function pushTest() {
+  pushLog('正在发一条测试提醒…');
+  try {
+    const r = await fetch(PUSH.fn, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '轻舟在主动找你', body: '推送通了。到点我就会这样提醒你。' })
+    });
+    const j = await r.json().catch(() => ({}));
+    pushLog(j && j.ok ? `已发出（送到 ${j.sent || 0} 台设备）` : '发送失败：' + (j?.error || r.status));
+  } catch (e) { pushLog('发送失败：' + e.message); }
+}
+
+// 轮询兜底：查到期的提醒，弹通知并标记已送（APK 里主要靠这个）
+let _dueBusy = false;
+async function checkDue() {
+  if (_dueBusy) return;
+  _dueBusy = true;
+  try {
+    const sb = sbClient();
+    const { data, error } = await sb.from('qz_triggers')
+      .select('id,title,body').eq('sent', false).lte('fire_at', new Date().toISOString()).limit(10);
+    if (error || !data || !data.length) return;
+    for (const t of data) {
+      try {
+        if (window.Notification && Notification.permission === 'granted') {
+          new Notification(t.title, { body: t.body || '', icon: 'icons/onboard-cloud.png' });
+        } else {
+          toast('⏰ ' + t.title + (t.body ? '：' + t.body : ''));
+        }
+      } catch (_) { toast('⏰ ' + t.title); }
+      await sb.from('qz_triggers').update({ sent: true, sent_at: new Date().toISOString() }).eq('id', t.id);
+    }
+  } catch (_) { /* 云端连不上就算了，下次再试 */ } finally { _dueBusy = false; }
+}
+
+function renderPushBtn() {
+  const b = $('#pushBtn'); if (!b) return;
+  pushState().then(s => {
+    if (s === 'unsupported') { b.textContent = '此浏览器不支持推送'; b.disabled = true; return; }
+    b.textContent = s === 'on' ? '推送已开启' : s === 'blocked' ? '通知被系统拦了' : '开启推送提醒';
+    b.classList.toggle('primary', s !== 'on');
+  });
+}
+$('#pushBtn') && ($('#pushBtn').onclick = async () => { await enablePush(); renderPushBtn(); });
+$('#pushTestBtn') && ($('#pushTestBtn').onclick = pushTest);
+renderPushBtn();
+// 注册 SW（轮询和推送都靠它）并启动轮询
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+setTimeout(checkDue, 3000);
+setInterval(checkDue, 60000);
+
 boot();
