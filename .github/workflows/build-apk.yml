@@ -50,7 +50,11 @@ jobs:
       # 状态栏通知（App 原生推送）：Android 13+ 必须声明 POST_NOTIFICATIONS 才会弹权限框；
       # SCHEDULE_EXACT_ALARM 让"到点提醒"能准点触发。
       - name: 声明通知权限
-        run: sed -i 's|<application |<uses-permission android:name="android.permission.POST_NOTIFICATIONS" /><uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" /><uses-permission android:name="android.permission.WAKE_LOCK" /><application |' android/app/src/main/AndroidManifest.xml
+        run: |
+          sed -i 's|<application|<uses-permission android:name="android.permission.POST_NOTIFICATIONS" /><application|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" /><application|' android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.WAKE_LOCK" /><application|' android/app/src/main/AndroidManifest.xml
+          grep -o 'POST_NOTIFICATIONS' android/app/src/main/AndroidManifest.xml | head -1
 
       - name: 编译 Debug APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
