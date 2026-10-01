@@ -1361,50 +1361,124 @@ function sbClient() {
   return window.supabase.createClient(SB.url, SB.key, { auth: { persistSession: false } });
 }
 
+// 是不是装在原生 App 里（安卓 APK）？原生里 WebView 不支持 Web Push，得用原生通知
+function isNative() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+}
+function LN() {
+  return (window.Capacitor && window.Capacitor.Plugins) ? window.Capacitor.Plugins.LocalNotifications : null;
+}
+
+// 统一"弹一条状态栏通知"：原生优先，浏览器兜底
+async function notify(title, body) {
+  const ln = LN();
+  if (ln) {
+    try {
+      let perm = await ln.checkPermissions();
+      if (perm.display !== 'granted') perm = await ln.requestPermissions();
+      if (perm.display === 'granted') {
+        await ln.schedule({
+          notifications: [{
+            id: Math.floor(Math.random() * 100000),
+            title: title || '轻舟',
+            body: body || '',
+            smallIcon: 'ic_stat_icon_config_sample',
+            iconColor: '#1d4ed8',
+            schedule: { at: new Date(Date.now() + 300) }
+          }]
+        });
+        return true;
+      }
+    } catch (_) { /* 掉到下面的浏览器兜底 */ }
+  }
+  try {
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification(title || '轻舟', { body: body || '', icon: 'icons/onboard-cloud.png' });
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 async function pushState() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return 'unsupported';
+  if (isNative()) {
+    const ln = LN();
+    if (!ln) return 'unsupported';
+    try {
+      const p = await ln.checkPermissions();
+      return p.display === 'granted' ? 'on' : 'off';
+    } catch { return 'off'; }
+  }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    // 有些内置浏览器不支持推送，但照样能用通知权限（退回本地轮询通知）
+    return (window.Notification && Notification.permission === 'granted') ? 'on' : 'off';
+  }
   const reg = await navigator.serviceWorker.getRegistration().catch(() => null);
-  if (!reg) return 'off';
+  if (!reg) return (window.Notification && Notification.permission === 'granted') ? 'on' : 'off';
   const sub = await reg.pushManager.getSubscription().catch(() => null);
-  if (!sub) return 'off';
+  if (!sub) return (window.Notification && Notification.permission === 'granted') ? 'on' : 'off';
   return Notification.permission === 'granted' ? 'on' : 'blocked';
 }
 
 async function enablePush() {
   pushLog('正在开启…');
+  // ① 原生 App：申请系统通知权限（状态栏通知）
+  if (isNative()) {
+    const ln = LN();
+    if (!ln) { pushLog('这个安装包没带通知组件，需要重新打个新版本。'); return false; }
+    try {
+      let perm = await ln.checkPermissions();
+      if (perm.display !== 'granted') perm = await ln.requestPermissions();
+      if (perm.display !== 'granted') { pushLog('你没允许通知权限，去系统设置里给轻舟打开通知。'); return false; }
+      localStorage.setItem('qz_push', '1');
+      pushLog('已开启系统通知。轻舟现在能主动提醒你（App 挂着就能收到）。');
+      return true;
+    } catch (e) { pushLog('开启失败：' + e.message); return false; }
+  }
+  // ② 浏览器：优先 Web Push（关掉 App 也能收到）
   try {
-    const reg = await navigator.serviceWorker.register('sw.js');
-    await navigator.serviceWorker.ready;
-    const perm = await Notification.requestPermission();
+    const perm = (window.Notification && Notification.requestPermission) ? await Notification.requestPermission() : 'denied';
     if (perm !== 'granted') { pushLog('你没允许通知权限，推不了。'); return false; }
-    let sub = await reg.pushManager.getSubscription();
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: b64urlToU8(PUSH.vapid)
-      });
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      const reg = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToU8(PUSH.vapid) });
+      }
+      const j = sub.toJSON();
+      const { error } = await sbClient().from('qz_push_subs').upsert({
+        device: deviceId(), endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth
+      }, { onConflict: 'endpoint' });
+      if (error) throw new Error(error.message);
+      localStorage.setItem('qz_push', '1');
+      pushLog('已开启。App 关着也能收到。');
+      return true;
     }
-    const j = sub.toJSON();
-    const { error } = await sbClient().from('qz_push_subs').upsert({
-      device: deviceId(), endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth
-    }, { onConflict: 'endpoint' });
-    if (error) throw new Error(error.message);
     localStorage.setItem('qz_push', '1');
-    pushLog('已开启。轻舟现在可以在 App 关着的时候找你了。');
+    pushLog('已开启通知（这个浏览器不支持后台推送，App 开着时能收到提醒）。');
     return true;
   } catch (e) { pushLog('开启失败：' + e.message); return false; }
 }
 
 async function pushTest() {
   pushLog('正在发一条测试提醒…');
-  try {
-    const r = await fetch(PUSH.fn, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: '轻舟在主动找你', body: '推送通了。到点我就会这样提醒你。' })
-    });
-    const j = await r.json().catch(() => ({}));
-    pushLog(j && j.ok ? `已发出（送到 ${j.sent || 0} 台设备）` : '发送失败：' + (j?.error || r.status));
-  } catch (e) { pushLog('发送失败：' + e.message); }
+  // 先在本地弹一条（原生状态栏 / 浏览器通知都能看到），最直接
+  const ok = await notify('轻舟在主动找你', '推送通了。到点我就会这样提醒你。');
+  if (ok) pushLog('已发到系统通知栏，看看手机顶上有没有。');
+  // 浏览器端再走一次云端 Web Push（关掉 App 也能收到的那条通道）
+  if (!isNative()) {
+    try {
+      const r = await fetch(PUSH.fn, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '轻舟在主动找你', body: '推送通了。到点我就会这样提醒你。' })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j && j.ok) pushLog(`已发出（送到 ${j.sent || 0} 台设备）`);
+      else if (!ok) pushLog('发送失败：' + (j?.error || r.status));
+    } catch (e) { if (!ok) pushLog('发送失败：' + e.message); }
+  }
+  if (!ok) pushLog('没能弹出通知：可能权限没开。');
 }
 
 // 轮询兜底：查到期的提醒，弹通知并标记已送（APK 里主要靠这个）
@@ -1418,13 +1492,8 @@ async function checkDue() {
       .select('id,title,body').eq('sent', false).lte('fire_at', new Date().toISOString()).limit(10);
     if (error || !data || !data.length) return;
     for (const t of data) {
-      try {
-        if (window.Notification && Notification.permission === 'granted') {
-          new Notification(t.title, { body: t.body || '', icon: 'icons/onboard-cloud.png' });
-        } else {
-          toast('⏰ ' + t.title + (t.body ? '：' + t.body : ''));
-        }
-      } catch (_) { toast('⏰ ' + t.title); }
+      const ok = await notify(t.title, t.body);
+      if (!ok) toast('⏰ ' + t.title + (t.body ? '：' + t.body : ''));
       await sb.from('qz_triggers').update({ sent: true, sent_at: new Date().toISOString() }).eq('id', t.id);
     }
   } catch (_) { /* 云端连不上就算了，下次再试 */ } finally { _dueBusy = false; }
