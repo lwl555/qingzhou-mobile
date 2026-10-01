@@ -1,0 +1,15 @@
+{
+  "name": "轻舟",
+  "short_name": "轻舟",
+  "description": "你自己的私人 AI 助手，能主动找你。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    { "src": "icons/onboard-cloud.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
+    { "src": "icons/idea-pc.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }
+  ]
+}
