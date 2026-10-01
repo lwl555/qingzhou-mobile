@@ -90,6 +90,12 @@
         <button id="remoteBtn" class="primary">连远程</button>
       </div>
 
+      <div class="section-title" style="margin-top:20px">看电脑浏览器画面（可遥控）</div>
+      <p class="tip">远程连上电脑后，能在这里看到电脑浏览器的实时画面，并且**直接在画面上点**——登录、过验证码都在这儿做。登录过一次就会记住。</p>
+      <div class="row">
+        <button id="vpOpenBtn" class="primary">打开画面</button>
+      </div>
+
       <div class="section-title" style="margin-top:20px">主动找我（推送提醒）</div>
       <p class="tip">打开后，即使你没开 App，轻舟也能主动提醒你（定时提醒、盯着降价、到点通知）。iPhone 需先「添加到主屏幕」。</p>
       <div class="row">
@@ -156,6 +162,30 @@
   </section>
 </main>
 
+<!-- 电脑浏览器实时画面：看得见 + 点着操作（登录、验证码就在这儿过） -->
+<div class="viewpanel" id="viewPanel" hidden>
+  <div class="vp-head">
+    <span class="vp-t">电脑浏览器</span>
+    <button id="vpClose" class="act-x" type="button" aria-label="关闭">×</button>
+  </div>
+  <div class="vp-url" id="vpUrl">正在连接…</div>
+  <div class="vp-stage" id="vpStage">
+    <img id="vpImg" alt="电脑浏览器画面">
+    <div class="vp-msg" id="vpMsg">正在取画面…</div>
+  </div>
+  <div class="vp-bar">
+    <button id="vpRefresh" type="button">刷新</button>
+    <button id="vpBack" type="button">后退</button>
+    <button id="vpSignIn" type="button">去京东登录</button>
+  </div>
+  <div class="vp-bar">
+    <input id="vpText" placeholder="输入账号/密码/搜索词">
+    <button id="vpType" class="primary" type="button">输入</button>
+    <button id="vpEnter" type="button">回车</button>
+  </div>
+  <div class="vp-hint">先点画面上的输入框，再在下面输入；点画面任意处就是点击。登录完关掉就行。</div>
+</div>
+
 <!-- 活动记录：点头像看它刚才做了什么 -->
 <div class="actpanel" id="actPanel" hidden>
   <div class="act-head">
@@ -172,23 +202,11 @@
   <button class="ic" id="attBtn" type="button" aria-label="添加图片">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
   </button>
-  <button class="genbtn" id="genBtn" type="button">生成</button>
   <input id="fileInput" type="file" accept="image/*" hidden>
   <div class="field">
     <textarea id="txt" rows="1" placeholder="说点什么"></textarea>
   </div>
   <button class="send" id="send">发送</button>
-  <div class="genpanel" id="genPanel" hidden>
-    <div class="genhead">
-      <div class="gentabs">
-        <button class="gentab on" data-type="image" type="button">图片</button>
-        <button class="gentab" data-type="video" type="button">视频</button>
-      </div>
-      <button class="genclose" id="genClose" type="button" aria-label="关闭">×</button>
-    </div>
-    <textarea id="genPrompt" rows="2" placeholder="描述你想要的内容…"></textarea>
-    <button class="genrun" id="genRun" type="button">生成</button>
-  </div>
 </div>
 
 <!-- 底部导航 -->

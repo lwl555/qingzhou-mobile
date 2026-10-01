@@ -679,7 +679,13 @@ async function runChat(text, img, isRegen) {
       paint(); pushAI(acc); persist();
     } else if (state.mode === 'cloud') {
       acc = await chatCloud(sanitizeHistory(state.cur.msgs), ctl.signal);
-      paint(); pushAI(acc); persist();
+      const g = takeGenMark(acc);
+      if (g && g.prompt) {
+        acc = g.clean; paint(); pushAI(acc); persist();
+        await genAndShow(g.type, g.prompt);   // 模型说了要生成，这里真的去做
+      } else {
+        paint(); pushAI(acc); persist();
+      }
     } else if (state.mode === 'lan') {
       await chatLan(text, d => { acc += d; tickRate(d.length); paint(); }, img, ctl.signal, isRegen);
       if (!acc && !stopped) acc = '(没有回复)';
@@ -705,6 +711,10 @@ async function runChat(text, img, isRegen) {
         if (st === 'run') {
           row.classList.add('running'); si.textContent = '⚙️'; ss.textContent = summary ? `执行中 · ${summary}` : '执行中…';
           setStatus(`正在用「${name}」…`);
+          // 电脑在动浏览器 → 自动把画面推给手机看（用户能实时盯着，也能随手接管）
+          if (/^browser_/.test(String(name)) && state.mode === 'remote' && !window.__vpAuto) {
+            window.__vpAuto = 1; vpOpen();
+          }
         } else {
           row.classList.remove('running'); si.textContent = ok === false ? '⚠️' : '✅';
           ss.textContent = ok === false ? `失败 · ${summary || '出错了'}` : (summary || '完成');
@@ -789,7 +799,12 @@ function sysPrompt() {
     + `6. 给完方案顺手给"下一步可以做什么"（1-2 条），让用户少想一步；但别啰嗦。\n`
     + `7. 接到多步骤的活，先用一行说清"我打算分几步"，再逐步给结果——让人知道进展到哪了，而不是闷头憋大招。\n`
     + `8. 用户让你做就直接做，别反复确认；只有涉及花钱、发消息、删东西这类才先问一句。\n`
-    + `9. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。`;
+    + `9. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。\n\n`
+    + `要生成图片/视频时（用户说"画一张…""生成一段…视频"）：\n`
+    + `- 不要自己描述画面或说"我画不了"，直接输出一行指令，系统会真的去生成并把图/视频贴出来：\n`
+    + `  图片：[[生成图片]]一句话描述画面（越具体越好，可中英混排）\n`
+    + `  视频：[[生成视频]]一句话描述画面\n`
+    + `- 指令独占一行，前后可以有一句自然的说明（比如"好，我画一个——"），但不要假装已经画好了。`;
 }
 /* 长对话压缩：超过 24 条或 12000 字时，早期消息压成"每轮一行"的摘要，保留最近 12 条完整。
    摘要放最前（user 角色，满足"首条必须是 user"），模型仍知道之前聊过什么，token 却稳得住。 */
@@ -1193,36 +1208,44 @@ function stopVoice() {
 
 $('#micBtn').onclick = startVoice;
 $('#attBtn').onclick = () => $('#fileInput').click();
-// 生成面板：云端图片/视频（密钥走代理 agnes-proxy，前端只发描述）
-$('#genBtn').onclick = () => { const p = $('#genPanel'); p.hidden = !p.hidden; if (!p.hidden) $('#genPrompt').focus(); };
-$('#genClose').onclick = () => { $('#genPanel').hidden = true; };
-document.querySelectorAll('.gentab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('.gentab').forEach(x => x.classList.remove('on'));
-  t.classList.add('on'); state.genType = t.dataset.type;
-});
-$('#genRun').onclick = async () => {
-  const prompt = $('#genPrompt').value.trim();
-  if (!prompt) { toast('先描述想要的内容'); return; }
-  $('#genPanel').hidden = true; $('#genPrompt').value = '';
+/* 生成图片/视频：手机上不再有按钮，全部由 AI 决定。
+   云端模式没有工具可调，所以让模型在回复里带标记，前端识别后执行。
+   远程/局域网模式则交给电脑用的 ai_image / ai_video 工具（走在线模型，不依赖本地下载）。 */
+async function genAndShow(type, prompt) {
   showMsgs();
-  const type = state.genType || 'image';
-  const label = type === 'image' ? '生成图片' : '生成视频';
-  addMsg('me', label + '：' + prompt); pushUser(label + '：' + prompt);
   const el = addMsg('ai', '', { thinking: true });
   const bub = el.querySelector('.bub');
+  setStatus(type === 'image' ? '正在生成图片…' : '正在生成视频…');
   try {
     if (type === 'image') {
       const url = await createImage(prompt);
       state.cur.msgs.push({ role: 'assistant', content: '[media:image]' + url });
       bub.innerHTML = `<img class="media" src="${esc(url)}" alt="生成图片">`;
     } else {
-      const url = await createVideo(prompt, (p, st) => { bub.innerHTML = `<span class="typing"><i></i><i></i><i></i></span> 生成中 ${p || 0}%${st ? '（' + st + '）' : ''}`; });
+      const url = await createVideo(prompt, (p, st) => {
+        bub.innerHTML = `<span class="typing"><i></i><i></i><i></i></span> 生成中 ${p || 0}%${st ? '（' + st + '）' : ''}`;
+      });
       state.cur.msgs.push({ role: 'assistant', content: '[media:video]' + url });
       bub.innerHTML = `<video class="media" src="${esc(url)}" controls></video>`;
     }
+    pushAct((type === 'image' ? '生成图片' : '生成视频') + '：' + String(prompt).slice(0, 26));
+    setStatus('');
     addActions(el); persist();
-  } catch (e) { bub.textContent = '生成出错：' + e.message; addActions(el); }
-};
+  } catch (e) {
+    setStatus('');
+    bub.textContent = '生成出错：' + e.message;
+    addActions(el);
+  }
+}
+// 从模型回复里抠出生成指令（模型说了才做，不靠猜）
+function takeGenMark(s) {
+  const m = String(s || '').match(/\[\[\s*(生成图片|生图|图片|生成视频|生视频|视频)\s*\]\s*([^\n]*)/);
+  if (!m) return null;
+  const isVideo = /视频/.test(m[1]);
+  const prompt = (m[2] || '').trim();
+  const clean = String(s).replace(m[0], '').trim();
+  return { type: isVideo ? 'video' : 'image', prompt, clean };
+}
 $('#fileInput').onchange = e => {
   const f = e.target.files && e.target.files[0];
   if (!f) return;
@@ -1524,6 +1547,66 @@ $('#hdAva') && ($('#hdAva').onclick = () => {
 });
 $('#actClose') && ($('#actClose').onclick = () => { $('#actPanel').hidden = true; });
 $('#actPanel') && $('#actPanel').addEventListener('click', e => { if (e.target.id === 'actPanel') $('#actPanel').hidden = true; });
+
+/* ================= 电脑浏览器画面：看得见 + 点着操作（登录/验证码在这过） ================= */
+let vpTimer = null;
+function vpMsg(s) { const m = $('#vpMsg'); if (m) { m.textContent = s || ''; m.style.display = s ? 'block' : 'none'; } }
+async function vpFetch() {
+  if (state.mode !== 'remote') { vpMsg('只有「远程连上电脑」才能看电脑浏览器的画面。'); return; }
+  try {
+    const r = await remoteQuery({ cmd: 'browser_view' }, 'browser_view', 25000);
+    if (!r.ok) { vpMsg(r.error || '取画面失败'); return; }
+    const img = $('#vpImg');
+    img.src = r.dataUrl;
+    img.style.display = 'block';
+    vpMsg('');
+    $('#vpUrl').textContent = (r.title ? r.title + ' · ' : '') + (r.url || '（空白页）');
+  } catch (e) { vpMsg('取画面失败：' + e.message); }
+}
+async function vpTouch(o) {
+  if (state.mode !== 'remote') { toast('要先远程连上电脑'); return null; }
+  try { return await remoteQuery({ cmd: 'browser_touch', ...o }, 'browser_touch', 20000); }
+  catch (e) { toast('操作失败：' + e.message); return null; }
+}
+function vpOpen() {
+  const p = $('#viewPanel'); if (!p) return;
+  p.hidden = false;
+  vpFetch();
+  if (vpTimer) clearInterval(vpTimer);
+  vpTimer = setInterval(vpFetch, 2500);
+}
+function vpShut() {
+  const p = $('#viewPanel'); if (p) p.hidden = true;
+  if (vpTimer) { clearInterval(vpTimer); vpTimer = null; }
+}
+$('#vpOpenBtn') && ($('#vpOpenBtn').onclick = vpOpen);
+$('#vpClose') && ($('#vpClose').onclick = vpShut);
+$('#vpRefresh') && ($('#vpRefresh').onclick = vpFetch);
+$('#vpBack') && ($('#vpBack').onclick = async () => { await vpTouch({ action: 'back' }); setTimeout(vpFetch, 900); });
+$('#vpSignIn') && ($('#vpSignIn').onclick = async () => {
+  toast('正在打开京东登录页…');
+  await vpTouch({ action: 'goto', text: 'https://passport.jd.com/new/login.aspx' });
+  setTimeout(vpFetch, 1800);
+});
+$('#vpStage') && ($('#vpStage').onclick = async e => {
+  if (state.mode !== 'remote') return;
+  const img = $('#vpImg');
+  if (!img || !img.src || img.style.display === 'none') return;
+  const r = img.getBoundingClientRect();
+  if (!r.width) return;
+  const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;
+  await vpTouch({ action: 'tap', x: +x.toFixed(4), y: +y.toFixed(4) });
+  setTimeout(vpFetch, 700);
+});
+$('#vpType') && ($('#vpType').onclick = async () => {
+  const t = $('#vpText').value;
+  if (!t) { toast('先输入要打的内容'); return; }
+  await vpTouch({ action: 'input', text: t });
+  $('#vpText').value = '';
+  setTimeout(vpFetch, 700);
+});
+$('#vpEnter') && ($('#vpEnter').onclick = async () => { await vpTouch({ action: 'key', text: 'Enter' }); setTimeout(vpFetch, 1200); });
 
 renderAvatar(); fillPresets();
 boot();
