@@ -17,6 +17,124 @@ const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'ag
 const CLOUD_API = CLOUD.url.replace(/\/v1\/chat\/completions$/, '');
 const GEN = { imageModel: 'agnes-image-2.5-flash', videoModel: 'agnes-video-2.5-flash' };
 
+/* ================= 自定义模型（手动接入，Key 只存本机） ================= */
+const CUSTOM_KEY = 'qz_custom_models';
+function allCustom() {
+  try { const a = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function saveCustom(a) { try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(a)); } catch {} }
+const MODEL_PRESETS = [
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' },
+  { name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', model: 'kimi-latest' },
+  { name: '豆包', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seed-1-6-250615' },
+  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen3-235B-A22B' },
+  { name: '本地 Ollama', baseUrl: 'http://localhost:11434/v1', model: 'qwen3:8b' }
+];
+// 当前云端走哪个：内置 agnes 模型名，或 custom:<id>
+function activeCloud() {
+  const m = state.cloudModel || CLOUD.model;
+  if (String(m).indexOf('custom:') === 0) {
+    const c = allCustom().find(x => x.id === m.slice(7));
+    if (c) return { url: String(c.baseUrl).replace(/\/+$/, '') + '/chat/completions', key: c.key || '', model: c.model, name: c.name };
+  }
+  return { url: CLOUD.url, key: CLOUD.key, model: m, name: m };
+}
+async function testCustom(c) {
+  const url = String(c.baseUrl).replace(/\/+$/, '') + '/chat/completions';
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (c.key || '') },
+    body: JSON.stringify({ model: c.model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 })
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(String(j?.error?.message || j?.message || ('HTTP ' + r.status)).slice(0, 160));
+  return '连通 · ' + (j?.model || c.model);
+}
+
+/* ================= 形象 / 头像 ================= */
+const AVA_KEY = 'qz_avatar';
+const DEFAULT_AVA = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+  + '<circle cx="32" cy="32" r="32" fill="#1d4ed8"/>'
+  + '<circle cx="23" cy="26" r="4.6" fill="#fff"/><circle cx="41" cy="26" r="4.6" fill="#fff"/>'
+  + '<circle cx="23.6" cy="26.6" r="2" fill="#1d4ed8"/><circle cx="41.6" cy="26.6" r="2" fill="#1d4ed8"/>'
+  + '<path d="M22 39q10 8 20 0" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>'
+  + '</svg>');
+const AVA_STYLES = {
+  soft3d: 'soft 3D Pixar-style, smooth clay material, studio lighting',
+  anime: 'Japanese anime style, clean lineart, soft cel shading',
+  pixel: 'pixel art, 32-bit retro game style',
+  line: 'minimal flat line art, geometric shapes, thin strokes, white background',
+  ink: 'Chinese ink wash painting, minimal brush strokes, rice paper texture'
+};
+function getAvatar() { return localStorage.getItem(AVA_KEY) || DEFAULT_AVA; }
+function setAvatar(u) {
+  try { if (u) localStorage.setItem(AVA_KEY, u); else localStorage.removeItem(AVA_KEY); } catch {}
+  renderAvatar();
+}
+function renderAvatar() {
+  const u = getAvatar();
+  const a = $('#hdAva'), p = $('#avaPreview'), e = $('#emptyAva');
+  if (a) a.src = u;
+  if (p) p.src = u;
+  if (e) e.src = u;
+}
+function avaPrompt(style) {
+  const s = AVA_STYLES[style] || AVA_STYLES.soft3d;
+  return `a cute friendly AI assistant mascot character, ${s}, square avatar portrait, centered composition, big expressive eyes, gentle smile, plain simple background, high quality, no text, no watermark`;
+}
+async function genAvatar(style) {
+  const url = await createImage(avaPrompt(style));
+  setAvatar(url);
+  return url;
+}
+// 上传的图统一裁成 256×256 方图并压成 jpeg，免得 localStorage 被撑爆
+function pickAvatarFile(file) {
+  return new Promise((resolve, reject) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const S = 256, side = Math.min(img.width, img.height);
+        const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+        const g = cv.getContext('2d');
+        g.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, S, S);
+        resolve(cv.toDataURL('image/jpeg', 0.86));
+      };
+      img.onerror = () => reject(new Error('这张图读不了'));
+      img.src = rd.result;
+    };
+    rd.onerror = () => reject(new Error('文件读不了'));
+    rd.readAsDataURL(file);
+  });
+}
+
+/* ================= 实时状态 + 活动记录（学 Muse 那个会动的小人） ================= */
+let idleStat = '';
+function setStatus(t) {
+  const e = $('#statText'); if (!e) return;
+  e.textContent = t || idleStat;
+  if (t) e.classList.add('busy'); else e.classList.remove('busy');
+}
+const ACTS = [];
+function pushAct(text, ok) {
+  ACTS.unshift({ t: Date.now(), text, ok });
+  if (ACTS.length > 60) ACTS.pop();
+  renderActs();
+}
+function renderActs() {
+  const box = $('#actList'); if (!box) return;
+  if (!ACTS.length) { box.innerHTML = '<div class="histempty">还没有活动记录</div>'; return; }
+  box.innerHTML = ACTS.slice(0, 40).map(a => {
+    const d = new Date(a.t);
+    const hh = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    return `<div class="actrow"><span class="ai">${a.ok === false ? '⚠️' : '✅'}</span>`
+      + `<span class="at">${esc(a.text)}</span><span class="ah">${hh}</span></div>`;
+  }).join('');
+}
+
 // 云端图片生成：返回图片 URL
 async function createImage(prompt) {
   const r = await fetch(CLOUD_API + '/v1/images/generations', {
@@ -138,7 +256,8 @@ function setMode(mode, detail) {
 }
 function renderStat() {
   const t = $('#statText');
-  if (t) t.textContent = statRate ? `${statLabel} · ${statRate}` : statLabel;
+  idleStat = statRate ? `${statLabel} · ${statRate}` : statLabel;
+  if (t && !t.classList.contains('busy')) t.textContent = idleStat;
 }
 function renderBanner() {
   const b = $('#banner'); if (!b) return;
@@ -543,7 +662,7 @@ async function send() {
   await runChat(text, img, false);
 }
 async function runChat(text, img, isRegen) {
-  streaming = true; setBusy(true); startRate();
+  streaming = true; setBusy(true); startRate(); setStatus('在想…');
   let stopped = false;
   const ctl = new AbortController();
   let remoteStopFn = null;
@@ -583,8 +702,15 @@ async function runChat(text, img, isRegen) {
           stepCard.appendChild(row);
         }
         const si = row.querySelector('.si'), ss = row.querySelector('.ss');
-        if (st === 'run') { row.classList.add('running'); si.textContent = '⚙️'; ss.textContent = summary ? `执行中 · ${summary}` : '执行中…'; }
-        else { row.classList.remove('running'); si.textContent = ok === false ? '⚠️' : '✅'; ss.textContent = ok === false ? `失败 · ${summary || '出错了'}` : (summary || '完成'); }
+        if (st === 'run') {
+          row.classList.add('running'); si.textContent = '⚙️'; ss.textContent = summary ? `执行中 · ${summary}` : '执行中…';
+          setStatus(`正在用「${name}」…`);
+        } else {
+          row.classList.remove('running'); si.textContent = ok === false ? '⚠️' : '✅';
+          ss.textContent = ok === false ? `失败 · ${summary || '出错了'}` : (summary || '完成');
+          setStatus('');
+          pushAct(name + (ok === false ? ' 失败' : ' 完成') + (summary ? '：' + summary : ''), ok);
+        }
       };
       const r = chatRemote(text,
         d => { acc += d; tickRate(d.length); paint(); },
@@ -600,7 +726,7 @@ async function runChat(text, img, isRegen) {
     if (stopped) { if (!acc) { acc = '(已停止)'; paint(); } }
     else { acc = '出错：' + e.message; paint(); }
   }
-  stopRate();
+  stopRate(); setStatus('');
   if (!stopped) addActions(el);
   streaming = false; setBusy(false); streamStop = null; clearAttach(); scrollBottom();
 }
@@ -699,22 +825,24 @@ async function chatCloud(messages, signal, image) {
       ];
     }
   }
+  // 云端可能被切成了手动接入的自定义模型（Base URL / Key / 模型名都换掉）
+  const cf = activeCloud();
   let r;
   try {
-    r = await fetch(CLOUD.url, {
+    r = await fetch(cf.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
-      body: JSON.stringify({ model: state.cloudModel || CLOUD.model, messages: [{ role: 'system', content: sysPrompt() }, ...hist] }),
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
+      body: JSON.stringify({ model: cf.model, messages: [{ role: 'system', content: sysPrompt() }, ...hist] }),
       signal
     });
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new Error('连不上云端（' + (e.message || '网络错误') + '）');
+    throw new Error('连不上「' + cf.name + '」（' + (e.message || '网络错误') + '）');
   }
   const j = await r.json().catch(() => null);
   if (!r.ok || !j) {
     const detail = j?.error?.message || j?.message || '';
-    throw new Error('云端没响应（' + r.status + '）' + (detail ? '：' + String(detail).slice(0, 140) : ''));
+    throw new Error('「' + cf.name + '」没响应（' + r.status + '）' + (detail ? '：' + String(detail).slice(0, 140) : ''));
   }
   return j?.choices?.[0]?.message?.content || '(没有回复)';
 }
@@ -735,9 +863,13 @@ function fillModels() {
     $('#modelTip').textContent = '局域网直连电脑，模型在电脑的「模型」面板里切换。';
     sel.disabled = true;
   } else {
-    sel.innerHTML = CLOUD_MODELS.map(m => `<option value="${m}">云端 · ${m}</option>`).join('');
+    const cs = allCustom();
+    const customOpts = cs.map(c => `<option value="custom:${c.id}">我的 · ${esc(c.name)}（${esc(c.model)}）</option>`).join('');
+    sel.innerHTML = CLOUD_MODELS.map(m => `<option value="${m}">云端 · ${m}</option>`).join('') + customOpts;
     cur = state.cloudModel || CLOUD.model;
-    $('#modelTip').textContent = '云端模式用在线模型；连上电脑后可用你电脑上的模型。';
+    $('#modelTip').textContent = cs.length
+      ? '云端模型 + 你手动接入的模型，切换后下一句生效。'
+      : '默认用轻舟云端模型。点「手动接入」可以接你自己的（DeepSeek / 通义 / Kimi / 本地等）。';
     sel.disabled = false;
   }
   sel.value = cur;
@@ -1291,4 +1423,107 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 setTimeout(checkDue, 3000);
 setInterval(checkDue, 60000);
 
+/* ================= 模型：手动接入 / 测试 / 删除 ================= */
+function mlog(s) { const e = $('#modelLog'); if (e) e.textContent = s || ''; }
+function fillPresets() {
+  const sel = $('#cmPreset'); if (!sel) return;
+  sel.innerHTML = '<option value="">选个模板自动填…</option>'
+    + MODEL_PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+}
+$('#cmPreset') && ($('#cmPreset').onchange = e => {
+  const i = e.target.value; if (i === '') return;
+  const p = MODEL_PRESETS[+i]; if (!p) return;
+  $('#cmName').value = p.name; $('#cmBase').value = p.baseUrl; $('#cmModel').value = p.model; $('#cmKey').value = '';
+  mlog(`已填入「${p.name}」的地址和模型名，只差 API Key。`);
+});
+$('#modelAddBtn') && ($('#modelAddBtn').onclick = () => { $('#modelForm').hidden = false; mlog(''); });
+$('#cmCancelBtn') && ($('#cmCancelBtn').onclick = () => { $('#modelForm').hidden = true; mlog(''); });
+$('#cmSaveBtn') && ($('#cmSaveBtn').onclick = async () => {
+  const c = {
+    id: 'm' + Date.now().toString(36),
+    name: ($('#cmName').value || '').trim(),
+    baseUrl: ($('#cmBase').value || '').trim(),
+    key: ($('#cmKey').value || '').trim(),
+    model: ($('#cmModel').value || '').trim()
+  };
+  if (!c.name || !c.baseUrl || !c.model) { mlog('名字、Base URL、模型名三项都得填。'); return; }
+  const a = allCustom(); a.push(c); saveCustom(a);
+  state.cloudModel = 'custom:' + c.id;
+  localStorage.setItem('qz_cloud_model', state.cloudModel);
+  fillModels(); $('#modelForm').hidden = true;
+  mlog('正在测试连接…');
+  try { mlog('已保存 · ' + await testCustom(c)); }
+  catch (e) { mlog('已保存，但连不上：' + e.message); }
+});
+$('#modelTestBtn') && ($('#modelTestBtn').onclick = async () => {
+  const m = String(state.cloudModel || CLOUD.model);
+  if (m.indexOf('custom:') !== 0) {
+    mlog('正在测试内置模型 ' + m + ' …');
+    try {
+      const r = await fetch(CLOUD.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+        body: JSON.stringify({ model: m, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 })
+      });
+      const j = await r.json().catch(() => null);
+      mlog(r.ok ? ('连通 · ' + (j?.model || m)) : ('失败：' + String(j?.error?.message || ('HTTP ' + r.status))));
+    } catch (e) { mlog('失败：' + e.message); }
+    return;
+  }
+  const c = allCustom().find(x => x.id === m.slice(7));
+  if (!c) { mlog('没找到这个自定义模型。'); return; }
+  mlog('正在测试「' + c.name + '」…');
+  try { mlog(await testCustom(c)); } catch (e) { mlog('连不上：' + e.message); }
+});
+$('#modelDelBtn') && ($('#modelDelBtn').onclick = () => {
+  const m = String(state.cloudModel || '');
+  if (m.indexOf('custom:') !== 0) { mlog('当前是轻舟内置模型，删不了。'); return; }
+  saveCustom(allCustom().filter(x => x.id !== m.slice(7)));
+  state.cloudModel = ''; localStorage.setItem('qz_cloud_model', '');
+  fillModels(); mlog('已删除，切回轻舟云端模型。');
+});
+
+/* ================= 形象：AI 生成 / 相册 / 还原 ================= */
+function alog(s) { const e = $('#avaLog'); if (e) e.textContent = s || ''; }
+$('#avaGenBtn') && ($('#avaGenBtn').onclick = async () => {
+  const sel = $('#avaStyle');
+  const style = sel ? sel.value : 'soft3d';
+  const label = sel && sel.selectedOptions && sel.selectedOptions[0] ? sel.selectedOptions[0].text : '卡通';
+  alog('正在生成，大约十几秒…');
+  setStatus('正在生成头像…');
+  try {
+    await genAvatar(style);
+    setStatus('');
+    pushAct('生成头像（' + label + '）');
+    alog('头像换好了。');
+    toast('新头像生成好了');
+  } catch (e) {
+    setStatus('');
+    alog('生成失败：' + e.message);
+    toast('头像生成失败');
+  }
+});
+$('#avaPickBtn') && ($('#avaPickBtn').onclick = () => $('#avaFile').click());
+$('#avaFile') && ($('#avaFile').onchange = async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    setAvatar(await pickAvatarFile(f));
+    pushAct('更换头像（从相册）');
+    alog('已换成你选的图。');
+  } catch (err) { alog('失败：' + err.message); }
+  e.target.value = '';
+});
+$('#avaResetBtn') && ($('#avaResetBtn').onclick = () => { setAvatar(null); alog('已还原成默认形象。'); });
+
+/* ================= 活动记录面板 ================= */
+$('#hdAva') && ($('#hdAva').onclick = () => {
+  const p = $('#actPanel'); if (!p) return;
+  p.hidden = !p.hidden;
+  if (!p.hidden) renderActs();
+});
+$('#actClose') && ($('#actClose').onclick = () => { $('#actPanel').hidden = true; });
+$('#actPanel') && $('#actPanel').addEventListener('click', e => { if (e.target.id === 'actPanel') $('#actPanel').hidden = true; });
+
+renderAvatar(); fillPresets();
 boot();
