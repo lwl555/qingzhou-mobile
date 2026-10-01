@@ -172,8 +172,10 @@ body{background:var(--bg);color:var(--ink);
   border-radius:var(--r-sm);padding:13px;margin-bottom:10px;box-shadow:var(--shadow-sm);text-align:left;
   font:inherit;color:var(--ink);width:100%;transition:transform .12s,border-color .15s,background .15s}
 .idea:active{transform:scale(.98);border-color:var(--brand);background:var(--brand-soft)}
-.idea .ico{width:34px;height:34px;flex:none;border-radius:10px;background:var(--brand-weak);color:var(--brand);
-  display:flex;align-items:center;justify-content:center;font-size:17px}
+.idea .ico{width:44px;height:44px;flex:none;border-radius:12px;overflow:hidden;background:#fff;
+  box-shadow:0 1px 3px rgba(17,24,39,.1)}
+.idea .ico img{width:100%;height:100%;display:block}
+.idea .ico .emj{font-size:20px;line-height:44px;text-align:center}
 .idea .it{font-size:13.5px;font-weight:600;line-height:1.4}
 .idea .is{font-size:11.5px;color:var(--gray2);margin-top:2px;line-height:1.5}
 
@@ -202,25 +204,26 @@ body{background:var(--bg);color:var(--ink);
 .histitem .hs{font-size:11.5px;color:var(--gray2)}
 .histempty{padding:14px 4px;font-size:12.5px;color:var(--gray2);text-align:center}
 
-/* ---------- 首屏引导（动画操作介绍） ---------- */
-.ob{position:fixed;inset:0;z-index:100;background:linear-gradient(160deg,#1d4ed8,#3b5bdb);
-  display:flex;flex-direction:column;color:#fff;opacity:0;transition:opacity .4s ease;pointer-events:none}
+/* ---------- 首屏引导（浅色干净风 + AI 生成图标） ---------- */
+.ob{position:fixed;inset:0;z-index:100;background:linear-gradient(180deg,#fbfcff 0%,#eef2fb 100%);
+  display:flex;flex-direction:column;color:var(--ink);opacity:0;transition:opacity .4s ease;pointer-events:none}
 .ob.on{opacity:1;pointer-events:auto}
 .ob-step{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;padding:0 34px;text-align:center}
 .ob-step.on{display:flex;animation:obIn .5s cubic-bezier(.2,.7,.3,1) both}
 @keyframes obIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
-.ob-ico{width:96px;height:96px;border-radius:28px;background:rgba(255,255,255,.14);
-  display:flex;align-items:center;justify-content:center;margin-bottom:24px;animation:float 3s ease-in-out infinite}
-.ob-ico svg{width:48px;height:48px}
+.ob-ico{width:116px;height:116px;border-radius:30px;overflow:hidden;background:#fff;
+  box-shadow:0 14px 34px rgba(29,78,216,.14),0 3px 8px rgba(29,78,216,.08);
+  margin-bottom:26px;animation:float 3s ease-in-out infinite}
+.ob-ico img{width:100%;height:100%;display:block}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
-.ob h2{font-size:21px;font-weight:700;margin:0 0 12px}
-.ob p{font-size:14px;line-height:1.75;opacity:.92;margin:0;max-width:280px}
+.ob h2{font-size:22px;font-weight:700;margin:0 0 12px;color:#1f2430}
+.ob p{font-size:14px;line-height:1.75;color:#5b6472;margin:0;max-width:280px}
 .ob-dots{display:flex;gap:8px;justify-content:center;padding:14px}
-.ob-dots i{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.35);transition:all .3s}
-.ob-dots i.on{width:18px;border-radius:4px;background:#fff}
+.ob-dots i{width:7px;height:7px;border-radius:50%;background:#d5dbe8;transition:all .3s}
+.ob-dots i.on{width:18px;border-radius:4px;background:var(--brand)}
 .ob-bar{display:flex;gap:12px;padding:0 24px calc(28px + env(safe-area-inset-bottom))}
 .ob-bar button{flex:1;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:600}
-.ob-skip{background:rgba(255,255,255,.16);color:#fff}
-.ob-next{background:#fff;color:var(--brand)}
+.ob-skip{background:#fff;color:#5b6472;border:1px solid var(--line2)}
+.ob-next{background:var(--brand);color:#fff}
 
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
