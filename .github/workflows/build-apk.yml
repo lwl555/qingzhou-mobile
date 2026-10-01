@@ -38,9 +38,13 @@ jobs:
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
 
       # 手机上要直连电脑的 http://192.168.x.x:8787，必须允许明文流量，
-      # 否则 Android 9+ 默认禁止，局域网模式会连不上
+      # 否则 Android 9+ 默认禁止，局域网模式会连不上。
+      # 注意：Capacitor 生成的 manifest 里 <application 后面可能没有空格（直接换行/属性），
+      # 所以这里用 "<application"（不带尾随空格）匹配，保证一定插得上。
       - name: 允许明文 HTTP
-        run: sed -i 's|<application |<application android:usesCleartextTraffic="true" |' android/app/src/main/AndroidManifest.xml
+        run: |
+          sed -i 's|<application|<application android:usesCleartextTraffic="true" |' android/app/src/main/AndroidManifest.xml
+          grep -o 'usesCleartextTraffic' android/app/src/main/AndroidManifest.xml | head -1 || echo "WARN: cleartext not injected"
 
       # 语音输入（左下角麦克风）：声明录音权限。@capacitor-community/speech-recognition
       # 的库清单一般会合并进来，这里再显式声明一次，双保险。
