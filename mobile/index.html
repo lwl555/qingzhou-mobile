@@ -16,20 +16,84 @@
     <div class="hd-sub"><span class="dot" id="dot"></span><span id="statText">检测中…</span></div>
   </div>
   <button class="hd-btn" id="newBtn" aria-label="新对话">新对话</button>
-  <button class="hd-btn" id="cfgBtn">连接</button>
 </header>
 
-<div class="wrap" id="wrap">
-  <div class="empty" id="empty">
-    <div class="hi" id="hi">你好</div>
-    <p class="hi-sub">在家连你电脑用本地模型，出门自动走云端。</p>
-    <div class="chips" id="list"></div>
-    <p class="privacy">数据默认留在本机，连不上电脑才走云端。连上电脑还能用本地文件、直接操作桌面。</p>
-  </div>
-  <div class="msgs" id="msgs"></div>
-</div>
+<!-- 连接状态横幅（连上电脑/远程时显示） -->
+<div id="banner" class="banner cloud" hidden></div>
 
-<div class="composer">
+<main class="views">
+  <!-- 对话 -->
+  <section class="view on" id="view-chat">
+    <div class="wrap" id="wrap">
+      <div class="empty" id="empty">
+        <div class="hi" id="hi">你好</div>
+        <p class="hi-sub">在家连你电脑用本地模型，出门自动走云端。</p>
+        <div class="chips" id="list"></div>
+        <p class="privacy">数据默认留在本机，连不上电脑才走云端。连上电脑还能用本地文件、直接操作桌面。</p>
+      </div>
+      <div class="msgs" id="msgs"></div>
+    </div>
+  </section>
+
+  <!-- 灵感（主动建议，借鉴 Muse Ideas） -->
+  <section class="view" id="view-ideas">
+    <div class="panel">
+      <div class="section-title">💡 灵感 · 可以让我帮你做的
+        <span class="more" id="genIdeas">AI 帮我想想</span>
+      </div>
+      <div id="ideaList"></div>
+      <p class="tip" style="margin-top:6px">点一条直接开聊；也可以说"帮我盯着某网页降价""把这段话改专业点"。</p>
+    </div>
+  </section>
+
+  <!-- 历史 -->
+  <section class="view" id="view-history">
+    <div class="panel">
+      <div class="section-title">本机对话</div>
+      <div class="histlist" id="localList"></div>
+      <div class="section-title" style="margin-top:18px">电脑上的会话
+        <span class="more" id="histBtn">读取</span>
+      </div>
+      <div class="histlist" id="histList"></div>
+      <div class="scanlog" id="histLog"></div>
+    </div>
+  </section>
+
+  <!-- 连接 / 我的 -->
+  <section class="view" id="view-connect">
+    <div class="panel">
+      <div class="section-title">连接电脑（局域网）</div>
+      <p class="tip">手机和电脑同一个 Wi-Fi 时填它的局域网地址，之后打开自动直连，能用电脑上的模型、文件和工具。</p>
+      <input id="ipInput" class="sheet-input" placeholder="例如 192.168.1.5" inputmode="numeric">
+      <div class="row">
+        <button id="scanBtn">扫描</button>
+        <button id="saveBtn" class="primary">连接</button>
+      </div>
+      <div class="scanlog" id="scanLog"></div>
+
+      <div class="section-title" style="margin-top:20px">远程（在外面连电脑）</div>
+      <p class="tip">先在电脑上打开「远程操作」，会显示一个本机号码；填到这里，在外面也能直接操作那台电脑。</p>
+      <input id="pcIdInput" class="sheet-input" placeholder="例如 A3F9K2" autocapitalize="characters">
+      <div class="row">
+        <button id="remoteBtn" class="primary">连远程</button>
+      </div>
+
+      <div class="section-title" style="margin-top:20px">模型</div>
+      <p class="tip" id="modelTip">云端模式用在线模型；连上电脑后可用你电脑上的模型。</p>
+      <select id="modelSel" class="sheet-input"></select>
+
+      <div class="section-title" style="margin-top:20px">助手名字</div>
+      <p class="tip">给它起个名字，它会一直用这个名字自称。改完立即生效。</p>
+      <div class="row">
+        <input id="nameInput" class="sheet-input" placeholder="例如 阿呆" maxlength="8" style="flex:1;min-width:0;margin-bottom:0">
+        <button id="nameSaveBtn" class="primary" style="flex:none;padding:12px 18px">保存</button>
+      </div>
+      <p class="tip2" style="margin:11px 0 0;font-size:11.5px;color:var(--gray2)">不填也能用：连不上电脑时会自动用云端模型。</p>
+    </div>
+  </section>
+</main>
+
+<div class="composer" id="composer">
   <button class="ic" id="micBtn" type="button" aria-label="语音输入">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
   </button>
@@ -43,48 +107,47 @@
   <button class="send" id="send">发送</button>
 </div>
 
-<div class="sheet" id="sheet" hidden>
-  <div class="sheet-box">
-    <div class="sheet-bar"></div>
-    <h3>连接电脑</h3>
-    <p class="tip">手机和电脑在同一个 Wi-Fi 时填它的局域网地址，之后打开就自动直连，能用电脑上的模型、文件和工具。</p>
-    <input id="ipInput" placeholder="例如 192.168.1.5" inputmode="numeric">
-    <div class="row">
-      <button id="scanBtn">扫描</button>
-      <button id="saveBtn" class="primary">连接</button>
-    </div>
-    <div class="scanlog" id="scanLog"></div>
+<!-- 底部导航 -->
+<nav class="tabbar" id="tabbar">
+  <button class="tab on" data-view="chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    对话
+  </button>
+  <button class="tab" data-view="ideas">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>
+    灵感
+  </button>
+  <button class="tab" data-view="history">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
+    历史
+  </button>
+  <button class="tab" data-view="connect">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1.82.33 1.65 1.65 0 0 0-.33 1.82V23h-2v-2.65A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82-.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H1v-2h2.65A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8 4.6a1.65 1.65 0 0 0 1-1.51V1h2v2.65A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H23v2h-2.65A1.65 1.65 0 0 0 19.4 15z"/></svg>
+    连接
+  </button>
+</nav>
 
-    <h3 style="margin-top:18px">远程（在外面连电脑）</h3>
-    <p class="tip">先在电脑上打开「远程操作」，会显示一个本机号码；把号码填到这里，之后在外面也能直接操作那台电脑。</p>
-    <input id="pcIdInput" placeholder="例如 A3F9K2" autocapitalize="characters">
-    <div class="row">
-      <button id="remoteBtn" class="primary">连远程</button>
-    </div>
-
-    <h3 style="margin-top:18px">模型</h3>
-    <p class="tip" id="modelTip">云端模式用在线模型；连上电脑后可用你电脑上的模型。</p>
-    <select id="modelSel"></select>
-
-    <h3 style="margin-top:18px">助手名字</h3>
-    <p class="tip">给它起个名字，它会一直用这个名字自称。改完立即生效。</p>
-    <div class="row">
-      <input id="nameInput" placeholder="例如 阿呆" maxlength="8" style="flex:1;min-width:0">
-      <button id="nameSaveBtn" class="primary">保存</button>
-    </div>
-
-    <h3 style="margin-top:18px">历史对话</h3>
-    <p class="tip">你在手机上的对话都存在本机，点一条就能接着聊。</p>
-    <div class="histlist" id="localList"></div>
-
-    <h3 style="margin-top:16px">电脑上的会话</h3>
-    <p class="tip">远程连上电脑后，可以读电脑上存的历史对话，点一条就在上面打开。</p>
-    <button id="histBtn" class="ghostbtn">读取电脑上的会话</button>
-    <div class="scanlog" id="histLog"></div>
-    <div class="histlist" id="histList"></div>
-
-    <p class="tip2">不填也能用：连不上电脑时会自动用云端模型。</p>
-    <button class="close" id="closeSheet">关闭</button>
+<!-- 首屏动画引导（仅首次） -->
+<div class="ob" id="ob" hidden>
+  <div class="ob-step on" data-i="0">
+    <div class="ob-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg></div>
+    <h2>语音就能聊</h2>
+    <p>点左下角麦克风，直接说话。轻舟把你说的话变成文字发出去，不用打字也能交办事情。</p>
+  </div>
+  <div class="ob-step" data-i="1">
+    <div class="ob-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+    <h2>连上你的电脑</h2>
+    <p>在「连接」里填电脑的局域网地址或远程号码，就能用你电脑上的模型、读本地文件、直接操作桌面——在外面也能遥控。</p>
+  </div>
+  <div class="ob-step" data-i="2">
+    <div class="ob-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0 0-9 6 6 0 1 0-11.7 2"/><path d="M12 12v9M8 17l4 4 4-4"/></svg></div>
+    <h2>云端随时在</h2>
+    <p>连不上电脑时自动走云端模型，出门也能用。数据默认留在本机，只有交办的任务才会发出去。</p>
+  </div>
+  <div class="ob-dots"><i class="on"></i><i></i><i></i></div>
+  <div class="ob-bar">
+    <button class="ob-skip" id="obSkip">跳过</button>
+    <button class="ob-next" id="obNext">下一步</button>
   </div>
 </div>
 

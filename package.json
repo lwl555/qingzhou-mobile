@@ -1,9 +1,17 @@
 {
   "name": "qingzhou-mobile",
-  "version": "1.12.0",
+  "version": "1.17.0",
   "private": true,
   "description": "轻舟手机版：把 mobile/ 下的网页套进安卓 App 壳",
-  "scripts": { "sync": "cap sync android" },
-  "dependencies": { "@capacitor/android": "^6.1.2", "@capacitor/core": "^6.1.2" },
-  "devDependencies": { "@capacitor/cli": "^6.1.2" }
+  "scripts": {
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor-community/speech-recognition": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
 }

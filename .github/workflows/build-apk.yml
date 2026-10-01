@@ -42,6 +42,11 @@ jobs:
       - name: 允许明文 HTTP
         run: sed -i 's|<application |<application android:usesCleartextTraffic="true" |' android/app/src/main/AndroidManifest.xml
 
+      # 语音输入（左下角麦克风）：声明录音权限。@capacitor-community/speech-recognition
+      # 的库清单一般会合并进来，这里再显式声明一次，双保险。
+      - name: 声明录音权限
+        run: sed -i 's|<application |<uses-permission android:name="android.permission.RECORD_AUDIO" /><application |' android/app/src/main/AndroidManifest.xml
+
       - name: 编译 Debug APK
         run: cd android && chmod +x gradlew && ./gradlew assembleDebug
 
