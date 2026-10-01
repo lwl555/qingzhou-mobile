@@ -271,33 +271,45 @@ function renderList() {
   }
 }
 
+/* 灵感图标：AI 生成的软 3D 套图（idea-*.png），动态建议按 cat 映射到同一套 */
+const IDEA_ICONS = {
+  price: './icons/idea-price.png',
+  edit: './icons/idea-edit.png',
+  search: './icons/idea-search.png',
+  pc: './icons/idea-pc.png'
+};
 const DEFAULT_IDEAS = [
-  { t: '盯价格', s: '把商品链接发我，降价了就提醒你', icon: '🔔' },
-  { t: '改文案 / 润色', s: '贴一段文字，我帮你改专业或口语', icon: '✍️' },
-  { t: '联网搜最新', s: '问时事、查资料、比价格', icon: '🌐' },
-  { t: '连电脑干活', s: '远程让电脑跑任务、读本地文件', icon: '💻' }
+  { t: '盯价格', s: '把商品链接发我，降价了就提醒你', cat: 'price', q: '帮我盯着这个网页的价格，降价了告诉我：' },
+  { t: '改文案 / 润色', s: '贴一段文字，我帮你改专业或口语', cat: 'edit', q: '把下面这段话改得更专业：\n' },
+  { t: '联网搜最新', s: '问时事、查资料、比价格', cat: 'search', q: '帮我联网搜一下最新的：' },
+  { t: '连电脑干活', s: '远程让电脑跑任务、读本地文件', cat: 'pc', q: '帮我在电脑上查一下：' }
 ];
+function ideaIcon(it, i) {
+  if (it && typeof it.icon === 'string' && /\.png\s*$/i.test(it.icon)) return it.icon;
+  if (it && it.cat && IDEA_ICONS[it.cat]) return IDEA_ICONS[it.cat];
+  return Object.values(IDEA_ICONS)[(i || 0) % 4];
+}
 function renderIdeas(list) {
   const box = $('#ideaList'); if (!box) return;
   const arr = list || DEFAULT_IDEAS;
   box.innerHTML = '';
-  for (const it of arr) {
+  arr.forEach((it, i) => {
     const b = document.createElement('button');
     b.className = 'idea';
-    b.innerHTML = `<div class="ico">${it.icon || '💡'}</div><div><div class="it">${esc(it.t)}</div><div class="is">${esc(it.s || '')}</div></div>`;
+    b.innerHTML = `<div class="ico"><img src="${ideaIcon(it, i)}" alt="" loading="lazy"></div><div><div class="it">${esc(it.t)}</div><div class="is">${esc(it.s || '')}</div></div>`;
     b.onclick = () => {
       switchTab('chat');
       const q = it.q || it.t;
       txt.value = q; txt.dispatchEvent(new Event('input')); send();
     };
     box.appendChild(b);
-  }
+  });
 }
 async function genIdeas() {
   const box = $('#ideaList');
   box.innerHTML = '<p class="tip">正在让 AI 帮你想想能帮你做什么…</p>';
   const prompt = '你是轻舟（用户的私人手机助手）。请给 4 条"轻舟能帮普通用户做的事"的具体建议。'
-    + '每条返回 JSON：{"t":"简短标题(不超过12个字)","s":"为什么值得做(一句话)","icon":"一个emoji","q":"用户点这条时应自动发出的示例问句"}。'
+    + '每条返回 JSON：{"t":"简短标题(不超过12个字)","s":"为什么值得做(一句话)","cat":"从 price/edit/search/pc 四选一","q":"用户点这条时应自动发出的示例问句"}。'
     + '只返回 JSON 数组，不要任何解释或代码块标记。';
   try {
     const raw = await chatCloud([{ role: 'user', content: prompt }], null);
