@@ -604,9 +604,29 @@ function sysPrompt() {
     + `8. 用户让你做就直接做，别反复确认；只有涉及花钱、发消息、删东西这类才先问一句。\n`
     + `9. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。`;
 }
+/* 长对话压缩：超过 24 条或 12000 字时，早期消息压成"每轮一行"的摘要，保留最近 12 条完整。
+   摘要放最前（user 角色，满足"首条必须是 user"），模型仍知道之前聊过什么，token 却稳得住。 */
+function compressHistory(hist, maxMsgs = 24, maxChars = 12000) {
+  const total = hist.reduce((n, m) => n + String(m.content || '').length, 0);
+  if (hist.length <= maxMsgs && total <= maxChars) return hist;
+  const keep = 12;
+  const early = hist.slice(0, hist.length - keep);
+  if (early.length < 3) return hist;   // 太少不值得压
+  const digest = early
+    .map(m => `${m.role === 'user' ? '用户' : 'AI'}：${String(m.content).replace(/\s+/g, ' ').slice(0, 60)}`)
+    .join('\n')
+    .slice(0, 3000);
+  const summary = {
+    role: 'user',
+    content: `（此前对话摘要，共 ${early.length} 条，已省略细节）\n${digest}\n（摘要结束，以下为最近对话）`
+  };
+  return [summary, ...hist.slice(-keep)];
+}
+
 async function chatCloud(messages, signal, image) {
-  const hist = sanitizeHistory(messages);
+  let hist = sanitizeHistory(messages);
   if (!hist.length) return '(没有可发送的内容)';
+  hist = compressHistory(hist);   // 长对话自动压缩，防 token 爆炸
   // 带图：把最后一条 user 消息转成 OpenAI vision 多模态格式（实测 agnes-2.0-flash 支持）
   if (image) {
     const last = hist[hist.length - 1];
@@ -851,32 +871,51 @@ function openLocalSession(id) {
   renderCur(); renderList(); switchTab('chat');
   toast('已打开：' + (s.title || '对话'));
 }
+function renderPCList(list) {
+  histLog('');
+  const box = $('#histList'); box.innerHTML = '';
+  if (!list.length) { histLog('电脑上还没有会话。'); return; }
+  for (const s of list.slice(0, 60)) {
+    const b = document.createElement('button');
+    b.className = 'histitem';
+    b.innerHTML = `<span class="ht">${esc(s.title || '(无标题)')}</span><span class="hs">${s.count || (s.msgs || []).length || 0} 条 · ${fmtTime(s.updatedAt)}</span>`;
+    b.onclick = () => openPCSession(s.id, s.title);
+    box.appendChild(b);
+  }
+}
 async function loadPCHistory() {
-  if (state.mode !== 'remote') { histLog('只有远程连上电脑后，才能读电脑上的会话。'); return; }
+  if (state.mode === 'lan') {
+    histLog('正在读取电脑上的会话…');
+    try {
+      const r = await fetch(`http://${state.ip}:${PORT}/api/sessions`, { cache: 'no-store' });
+      const j = await r.json();
+      renderPCList(j.sessions || []);
+    } catch (e) { histLog('读取失败：' + e.message); }
+    return;
+  }
+  if (state.mode !== 'remote') { histLog('先连上电脑（局域网或远程）才能读它的会话。'); return; }
   histLog('正在读取电脑上的会话…');
   try {
     const r = await remoteQuery({ cmd: 'list_sessions' }, 'sessions');
-    const list = r.list || [];
-    if (!list.length) { histLog('电脑上还没有会话。'); return; }
-    histLog('');
-    const box = $('#histList'); box.innerHTML = '';
-    for (const s of list.slice(0, 60)) {
-      const b = document.createElement('button');
-      b.className = 'histitem';
-      b.innerHTML = `<span class="ht">${esc(s.title || '(无标题)')}</span><span class="hs">${s.count || 0} 条 · ${fmtTime(s.updatedAt)}</span>`;
-      b.onclick = () => openPCSession(s.id, s.title);
-      box.appendChild(b);
-    }
+    renderPCList(r.list || []);
   } catch (e) { histLog('读取失败：' + e.message); }
 }
 async function openPCSession(id, title) {
   histLog('正在打开…');
+  let messages = [];
   try {
-    const r = await remoteQuery({ cmd: 'open_session', sessionId: id }, 'session_data');
+    if (state.mode === 'lan') {
+      const r = await fetch(`http://${state.ip}:${PORT}/api/sessions/get?id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+      const j = await r.json();
+      messages = (j.session && j.session.messages) || [];
+    } else {
+      const r = await remoteQuery({ cmd: 'open_session', sessionId: id }, 'session_data');
+      messages = r.messages || [];
+    }
     newSession();
     const tip = { role: 'assistant', content: `（从电脑打开的会话：${title || ''}）` };
     state.cur.msgs.push(tip);
-    for (const m of (r.messages || [])) {
+    for (const m of messages) {
       if (m.role === 'system' || m.role === 'tool') continue;
       if (typeof m.content !== 'string' || !m.content.trim()) continue;
       state.cur.msgs.push({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content });
