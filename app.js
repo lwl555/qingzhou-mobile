@@ -251,7 +251,7 @@ function renderList() {
     named
       ? { t: `换个名字`, s: `现在是「${name()}」`, act: 'name' }
       : { t: `给${name()}起个名字`, s: '它会主动问你', act: 'name' },
-    { t: '盯着一个网页的价格', s: '降价了提醒我', q: '帮我盯着这个网页的价格，降价了告诉我：' },
+    { t: '查商品现价比价', s: '联网查 · 当场出结果', q: '帮我联网查一下这个商品现在的价格：' },
     { t: '把这段话改专业点', s: '贴进来即可', q: '把下面这段话改得更专业：\n' },
     { t: '搜一下最新消息', s: '联网查', q: '帮我联网搜一下最新的：' }
   ];
@@ -279,7 +279,7 @@ const IDEA_ICONS = {
   pc: './icons/idea-pc.png'
 };
 const DEFAULT_IDEAS = [
-  { t: '盯价格', s: '把商品链接发我，降价了就提醒你', cat: 'price', q: '帮我盯着这个网页的价格，降价了告诉我：' },
+  { t: '盯价格 / 比价', s: '把商品链接发我，当场查现价比价', cat: 'price', q: '帮我联网查一下这个商品现在的价格：' },
   { t: '改文案 / 润色', s: '贴一段文字，我帮你改专业或口语', cat: 'edit', q: '把下面这段话改得更专业：\n' },
   { t: '联网搜最新', s: '问时事、查资料、比价格', cat: 'search', q: '帮我联网搜一下最新的：' },
   { t: '连电脑干活', s: '远程让电脑跑任务、读本地文件', cat: 'pc', q: '帮我在电脑上查一下：' }
@@ -457,16 +457,18 @@ async function send() {
   txt.value = '';
   txt.style.height = 'auto';
   $('#send').classList.remove('on');
-  if (state.awaitName && text) {
-    showMsgs(); addMsg('me', text); clearAttach(); setName(text); return;
+  // 正在等起名：只有"短且不像一句话"的输入才当名字（修"一根筋"：问句/长句/带图走正常聊天）
+  if (state.awaitName && text && !pendingImage) {
+    const looksLikeName = text.length <= 8 && !/[。！？?！!，,、]/.test(text);
+    if (looksLikeName) { showMsgs(); addMsg('me', text); clearAttach(); setName(text); return; }
+    state.awaitName = false;   // 用户没在起名，问什么答什么
   }
   if (text && /^(改|换)(个|一下)?名字$|^重命名$|^换个名字吧?$/.test(text)) {
     showMsgs(); addMsg('me', text); clearAttach(); setTimeout(() => askName(true), 150); return;
   }
   showMsgs();
   addMsg('me', text || '（图片）');
-  if (img && state.mode === 'cloud') toast('云端看不了图片，这条只发文字；连上电脑才能发图');
-  pushUser(text);
+  pushUser(text || '（发了一张图片）');
   lastUserText = text;
   await runChat(text, img, false);
 }
@@ -481,14 +483,14 @@ async function runChat(text, img, isRegen) {
   let acc = '';
   const paint = () => { bub.innerHTML = md(acc); scrollBottom(); };
   try {
-    if (state.mode === 'cloud') {
-      if (img && !text) {
-        acc = '（云端模型看不了图片。连上电脑后，可以把图发给电脑上的模型识别。）';
-        paint(); pushAI(acc); persist();
-      } else {
-        acc = await chatCloud(sanitizeHistory(state.cur.msgs), ctl.signal);
-        paint(); pushAI(acc); persist();
-      }
+    // 带图轮：电脑上的本地模型基本是纯文本，图片统一交给云端视觉模型识别（三种模式都通）
+    if (img) {
+      if (state.mode !== 'cloud') toast('图片由云端模型识别（电脑模型暂不支持看图）');
+      acc = await chatCloud(sanitizeHistory(state.cur.msgs), ctl.signal, img);
+      paint(); pushAI(acc); persist();
+    } else if (state.mode === 'cloud') {
+      acc = await chatCloud(sanitizeHistory(state.cur.msgs), ctl.signal);
+      paint(); pushAI(acc); persist();
     } else if (state.mode === 'lan') {
       await chatLan(text, d => { acc += d; tickRate(d.length); paint(); }, img, ctl.signal, isRegen);
       if (!acc && !stopped) acc = '(没有回复)';
@@ -572,9 +574,20 @@ function sysPrompt() {
     + `7. 用户让你做就直接做，别反复确认；只有涉及花钱、发消息、删东西这类才先问一句。\n`
     + `8. 被问"你能干嘛/帮我做点什么"，结合上下文举 2-3 个具体例子，别只说"我什么都能做"。`;
 }
-async function chatCloud(messages, signal) {
+async function chatCloud(messages, signal, image) {
   const hist = sanitizeHistory(messages);
   if (!hist.length) return '(没有可发送的内容)';
+  // 带图：把最后一条 user 消息转成 OpenAI vision 多模态格式（实测 agnes-2.0-flash 支持）
+  if (image) {
+    const last = hist[hist.length - 1];
+    if (last && last.role === 'user') {
+      const t = (last.content && !/发了一张图片/.test(last.content)) ? last.content : '请看这张图片，结合我的问题回答。';
+      last.content = [
+        { type: 'text', text: t },
+        { type: 'image_url', image_url: { url: image } }
+      ];
+    }
+  }
   let r;
   try {
     r = await fetch(CLOUD.url, {
@@ -704,11 +717,55 @@ function addActions(el) {
     const t = el.querySelector('.bub').innerText;
     try { navigator.clipboard.writeText(t); toast('已复制'); } catch { toast('复制失败'); }
   };
+  const sp = document.createElement('button');
+  sp.type = 'button'; sp.textContent = '朗读'; sp.dataset.speak = '0';
+  sp.onclick = () => toggleSpeak(sp, el.querySelector('.bub').innerText);
   const rg = document.createElement('button');
   rg.type = 'button'; rg.textContent = '重新生成';
-  rg.onclick = () => regenerate(el);
-  bar.appendChild(cp); bar.appendChild(rg);
+  rg.onclick = () => { stopSpeak(); regenerate(el); };
+  bar.appendChild(cp); bar.appendChild(sp); bar.appendChild(rg);
   el.appendChild(bar);
+}
+
+/* ================= TTS 朗读（APK 用原生插件，网页用 speechSynthesis） ================= */
+let speakBtn = null;
+function cleanForTTS(s) {
+  return String(s || '')
+    .replace(/```[\s\S]*?```/g, '，代码略，')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\|/g, '，').replace(/[#*_>~]/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, '链接')
+    .slice(0, 900);
+}
+async function toggleSpeak(btn, text) {
+  if (btn.dataset.speak === '1') { stopSpeak(); return; }
+  stopSpeak();
+  const clean = cleanForTTS(text);
+  if (!clean.trim()) { toast('这段没有可朗读的内容'); return; }
+  const TTS = window.Capacitor?.Plugins?.TextToSpeech;
+  try {
+    if (TTS) {
+      await TTS.speak({ text: clean, language: 'zh-CN', rate: 1.0, pitch: 1.0 });
+    } else if (window.speechSynthesis) {
+      const u = new SpeechSynthesisUtterance(clean);
+      u.lang = 'zh-CN'; u.rate = 1.0;
+      u.onend = () => resetSpeakBtn();
+      u.onerror = () => resetSpeakBtn();
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    } else { toast('当前环境不支持朗读'); return; }
+    speakBtn = btn; btn.dataset.speak = '1'; btn.textContent = '停止';
+  } catch (e) { toast('朗读失败：' + (e.message || '未知')); }
+}
+function stopSpeak() {
+  const TTS = window.Capacitor?.Plugins?.TextToSpeech;
+  try { if (TTS) TTS.stop(); } catch {}
+  try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch {}
+  resetSpeakBtn();
+}
+function resetSpeakBtn() {
+  if (speakBtn) { speakBtn.dataset.speak = '0'; speakBtn.textContent = '朗读'; speakBtn = null; }
 }
 function scrollBottom() { requestAnimationFrame(() => { wrap.scrollTop = wrap.scrollHeight; }); }
 function showMsgs() { hideEmpty(); }
@@ -722,12 +779,37 @@ function renderLocalHistory() {
   box.innerHTML = '';
   if (!all.length) { box.innerHTML = '<div class="histempty">还没有历史对话</div>'; return; }
   for (const s of all) {
+    const row = document.createElement('div');
+    row.className = 'histrow' + (state.cur && s.id === state.cur.id ? ' cur' : '');
     const b = document.createElement('button');
-    b.className = 'histitem' + (state.cur && s.id === state.cur.id ? ' cur' : '');
+    b.className = 'histitem';
     b.innerHTML = `<span class="ht">${esc(s.title || '(空对话)')}</span><span class="hs">${(s.msgs || []).length} 条 · ${fmtTime(s.updatedAt)}</span>`;
     b.onclick = () => openLocalSession(s.id);
-    box.appendChild(b);
+    const del = document.createElement('button');
+    del.className = 'hdel'; del.type = 'button'; del.textContent = '删';
+    del.setAttribute('aria-label', '删除这条对话');
+    del.onclick = e => { e.stopPropagation(); delSession(s.id); };
+    row.appendChild(b); row.appendChild(del);
+    box.appendChild(row);
   }
+}
+function delSession(id) {
+  const s = allSessions().find(x => x.id === id);
+  if (!s) return;
+  if (!confirm('删除「' + (s.title || '这条对话') + '」？删了找不回来。')) return;
+  const all = allSessions().filter(x => x.id !== id);
+  writeSessions(all);
+  if (state.cur && state.cur.id === id) { newSession(); renderCur(); renderList(); }
+  renderLocalHistory();
+  toast('已删除');
+}
+function clearSessions() {
+  const all = allSessions();
+  if (!all.length) { toast('没有可清空的对话'); return; }
+  if (!confirm('清空全部 ' + all.length + ' 条历史对话？删了找不回来。')) return;
+  writeSessions([]);
+  newSession(); renderCur(); renderList(); renderLocalHistory();
+  toast('已全部清空');
 }
 function openLocalSession(id) {
   if (streaming) return;
@@ -913,6 +995,7 @@ $('#remoteBtn').onclick = async () => {
   } catch (e) { $('#scanLog').textContent = '连不上：' + e.message; }
 };
 $('#histBtn') && ($('#histBtn').onclick = loadPCHistory);
+$('#clearHist') && ($('#clearHist').onclick = clearSessions);
 $('#nameSaveBtn').onclick = () => {
   const v = ($('#nameInput').value || '').trim().replace(/[。！？.!?，,、\s]/g, '').slice(0, 8);
   if (!v) { toast('先填个名字'); return; }
