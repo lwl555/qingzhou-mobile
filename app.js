@@ -15,8 +15,13 @@ const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
 
 // 当前版本号（手机版）。更新日志手机版 / 电脑版分开记，App 内「版本与更新」各自展示。
-const APP_VERSION = '1.26.1';
+const APP_VERSION = '1.26.2';
 const PHONE_CHANGELOG = [
+  { v: '1.26.2', date: '2026-10-03', items: [
+    '内置云端连不上时自动切 Agnes 直连（不用手动换模型）',
+    '内置云端和直连两条路同时生效，默认走内置、失败才切',
+    '限速类报错不误切，如实提示'
+  ] },
   { v: '1.26.1', date: '2026-10-03', items: [
     '修复云端对话与生图全部不可用（云端代理域名失效）',
     '生图/生视频改为跟随你选的服务商，不再写死内置代理',
@@ -214,51 +219,77 @@ function renderActs() {
   }).join('');
 }
 
+/* 内置云端连不上时自动切到"Agnes 直连"那类自建模型（前提：用户已手动接入过）。
+   为什么：2026-10-03 实测内置代理所在域名被家里宽带按 SNI 阻断（时好时坏，
+   手机走流量是通的）。所以做成"默认内置 + 失败自动兜底"，两条路同时生效，用户不用手动切。
+   触发条件只有"网络层连不上"——429 限速这类不切（同一把 Key，切过去照样限）。 */
+function fallbackCloud() {
+  if (String(state.cloudModel || '').indexOf('custom:') === 0) return null;   // 已经在用自建的，没有兜底可言
+  const c = allCustom().find(x => /agnes-ai\.cn/i.test(String(x.baseUrl || '')) && String(x.key || '').trim());
+  if (!c) return null;
+  const base = String(c.baseUrl).replace(/\/+$/, '');
+  return { url: base + '/chat/completions', genBase: base, key: c.key, model: c.model, name: c.name + '（兜底）', custom: true };
+}
+const isNetErr = e => e instanceof Error && /连不上/.test(e.message || '');
+async function withCloudFallback(run) {
+  const primary = activeCloud();
+  const fb = fallbackCloud();
+  try {
+    return await run(primary);
+  } catch (e) {
+    if (e.name === 'AbortError' || !isNetErr(e) || !fb) throw e;
+    toast('内置云端连不上，已自动切「' + fb.name + '」');
+    return await run(fb);
+  }
+}
+
 // 云端图片生成：返回图片 URL（走当前选的云端服务商，不再写死内置代理）
 async function createImage(prompt) {
-  const cf = activeCloud();
-  const r = await cloudFetch(cf.genBase + '/images/generations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
-    body: JSON.stringify({ model: GEN.imageModel, prompt, n: 1 })
-  }, '图片服务');
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j) throw new Error('图片生成失败（' + r.status + '）' + (j?.error?.message || ''));
-  const url = j?.data?.[0]?.url;
-  if (!url) throw new Error('图片生成未返回地址');
-  return url;
+  return withCloudFallback(async cf => {
+    const r = await cloudFetch(cf.genBase + '/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
+      body: JSON.stringify({ model: GEN.imageModel, prompt, n: 1 })
+    }, '图片服务');
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j) throw new Error('图片生成失败（' + r.status + '）' + (j?.error?.message || ''));
+    const url = j?.data?.[0]?.url;
+    if (!url) throw new Error('图片生成未返回地址');
+    return url;
+  });
 }
 
 // 云端视频生成：异步任务，轮询直到完成，返回视频 URL
 async function createVideo(prompt, onStatus) {
-  const cf = activeCloud();
-  const model = GEN.videoModel;
-  const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key };
-  const r = await cloudFetch(cf.genBase + '/videos', {
-    method: 'POST', headers: H,
-    body: JSON.stringify({ model, prompt, mode: 'text', seconds: '5', aspect_ratio: '16:9' })
-  }, '视频服务');
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j) throw new Error('视频任务创建失败（' + r.status + '）' + (j?.error?.message || ''));
-  const vid = j?.video_id || j?.task_id || j?.id;
-  if (!vid) throw new Error('视频任务未返回 ID');
-  const deadline = Date.now() + 4 * 60 * 1000;
-  while (Date.now() < deadline) {
-    await new Promise(res => setTimeout(res, 4000));
-    const pr = await cloudFetch(cf.genBase + '/agnesapi?video_id=' + encodeURIComponent(vid) + '&model_name=' + encodeURIComponent(model), {
-      headers: H
+  return withCloudFallback(async cf => {
+    const model = GEN.videoModel;
+    const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key };
+    const r = await cloudFetch(cf.genBase + '/videos', {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ model, prompt, mode: 'text', seconds: '5', aspect_ratio: '16:9' })
     }, '视频服务');
-    const pj = await pr.json().catch(() => null);
-    const st = pj?.status;
-    if (onStatus) onStatus(pj?.progress || 0, st);
-    if (st === 'completed') {
-      const url = pj?.metadata?.url;
-      if (!url) throw new Error('视频完成但未返回地址');
-      return url;
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j) throw new Error('视频任务创建失败（' + r.status + '）' + (j?.error?.message || ''));
+    const vid = j?.video_id || j?.task_id || j?.id;
+    if (!vid) throw new Error('视频任务未返回 ID');
+    const deadline = Date.now() + 4 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 4000));
+      const pr = await cloudFetch(cf.genBase + '/agnesapi?video_id=' + encodeURIComponent(vid) + '&model_name=' + encodeURIComponent(model), {
+        headers: H
+      }, '视频服务');
+      const pj = await pr.json().catch(() => null);
+      const st = pj?.status;
+      if (onStatus) onStatus(pj?.progress || 0, st);
+      if (st === 'completed') {
+        const url = pj?.metadata?.url;
+        if (!url) throw new Error('视频完成但未返回地址');
+        return url;
+      }
+      if (st === 'failed') throw new Error('视频生成失败：' + (pj?.error?.message || pj?.message || '未知'));
     }
-    if (st === 'failed') throw new Error('视频生成失败：' + (pj?.error?.message || pj?.message || '未知'));
-  }
-  throw new Error('视频生成超时（超过 4 分钟）');
+    throw new Error('视频生成超时（超过 4 分钟）');
+  });
 }
 
 const state = {
@@ -988,27 +1019,20 @@ async function chatCloud(messages, signal, image) {
       ];
     }
   }
-  // 云端可能被切成了手动接入的自定义模型（Base URL / Key / 模型名都换掉）
-  const cf = activeCloud();
-  let r;
-  try {
-    r = await cloudFetch(cf.url, {
+  return withCloudFallback(async cf => {
+    const r = await cloudFetch(cf.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
       body: JSON.stringify({ model: cf.model, messages: [{ role: 'system', content: sysPrompt() }, ...hist] }),
       signal
     }, '「' + cf.name + '」');
-  } catch (e) {
-    if (e.name === 'AbortError') throw e;
-    throw e instanceof Error && /连不上/.test(e.message) ? e
-      : new Error('连不上「' + cf.name + '」（' + (e.message || '网络错误') + '）');
-  }
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j) {
-    const detail = j?.error?.message || j?.message || '';
-    throw new Error('「' + cf.name + '」没响应（' + r.status + '）' + (detail ? '：' + String(detail).slice(0, 140) : ''));
-  }
-  return j?.choices?.[0]?.message?.content || '(没有回复)';
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j) {
+      const detail = j?.error?.message || j?.message || '';
+      throw new Error('「' + cf.name + '」没响应（' + r.status + '）' + (detail ? '：' + String(detail).slice(0, 140) : ''));
+    }
+    return j?.choices?.[0]?.message?.content || '(没有回复)';
+  });
 }
 
 /* ================= 模型选择 ================= */
