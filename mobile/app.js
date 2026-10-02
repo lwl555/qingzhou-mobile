@@ -1770,23 +1770,48 @@ $('#cmCancelBtn') && ($('#cmCancelBtn').onclick = () => { $('#modelForm').hidden
    为什么要这个：电脑端只显示脱敏密钥，手机上手打 51 个字符太痛苦；
    而 2026-10-03 云端代理域名失效后，手机想自己接 Agnes 就必须有这个 Key。 */
 $('#cmKeyPcBtn') && ($('#cmKeyPcBtn').onclick = async () => {
-  if (state.mode !== 'remote') { mlog('要先在「连接」里连上电脑（远程），才能从电脑取密钥。'); return; }
-  if (!rChannel) { mlog('还没连上电脑。'); return; }
-  mlog('正在从电脑取密钥…');
-  try {
-    const r = await remoteQuery({ cmd: 'export_key', providerId: 'agnes' }, 'key', 20000);
-    if (!r.ok) { mlog('没取到：' + (r.error || '未知原因')); return; }
-    const k = String(r.key || '').trim();
-    if (!k) { mlog('没取到：电脑上还没配 Agnes 的 Key。'); return; }
+  const fill = (k) => {
     $('#cmKey').value = k;
     if (!$('#cmName').value) $('#cmName').value = 'Agnes 直连';
     if (!$('#cmBase').value) $('#cmBase').value = 'https://api.agnes-ai.cn/v1';
     if (!$('#cmModel').value) $('#cmModel').value = 'agnes-2.0-flash';
     mlog('取到了，密钥已填入（只存在这台手机上）。点「保存并测试」即可。');
     toast('密钥已从电脑取来');
-  } catch (e) {
-    mlog('取密钥失败：' + e.message);
+  };
+  // 先试局域网：直连 http，不经过任何云端，最可靠
+  if (state.mode === 'lan' && state.ip) {
+    mlog('正在从局域网内的电脑取密钥…');
+    try {
+      const r = await fetch(`http://${state.ip}:${PORT}/api/key/agnes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        signal: AbortSignal.timeout(12000)
+      });
+      const j = await r.json().catch(() => null);
+      if (r.status === 403) { mlog('电脑端开了「访问令牌」，手机直连被拒。可改用远程方式取。'); return; }
+      if (!j || !j.ok) { mlog('没取到：' + (j?.error || ('HTTP ' + r.status))); return; }
+      const k = String(j.key || '').trim();
+      if (!k) { mlog('没取到：电脑上还没配 Agnes 的 Key。'); return; }
+      return fill(k);
+    } catch (e) {
+      mlog('局域网这条路没走通（' + e.message + '），再试远程…');
+    }
   }
+  // 再试远程中继
+  if (state.mode === 'remote') {
+    if (!rChannel) { mlog('还没连上电脑。'); return; }
+    mlog('正在从电脑取密钥（走远程中继）…');
+    try {
+      const r = await remoteQuery({ cmd: 'export_key', providerId: 'agnes' }, 'key', 20000);
+      if (!r.ok) { mlog('没取到：' + (r.error || '未知原因')); return; }
+      const k = String(r.key || '').trim();
+      if (!k) { mlog('没取到：电脑上还没配 Agnes 的 Key。'); return; }
+      return fill(k);
+    } catch (e) {
+      mlog('远程这条路也没走通：' + e.message + '。也可以直接把 Key 粘贴进来。');
+      return;
+    }
+  }
+  mlog('要先在「连接」里连上电脑（局域网或远程），才能从电脑取密钥。也可以直接把 Key 粘贴进来。');
 });
 $('#cmSaveBtn') && ($('#cmSaveBtn').onclick = async () => {
   const c = {
