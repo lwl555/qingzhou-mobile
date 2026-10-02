@@ -328,3 +328,61 @@ body{background:var(--bg);color:var(--ink);
 .ob-next{background:var(--brand);color:#fff}
 
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* ---------- 智能选择卡片 [options:] ---------- */
+.optcard{margin:9px 2px 2px;border:1px solid var(--line2);border-radius:var(--r-sm);
+  background:#fff;padding:10px;box-shadow:0 1px 2px rgba(17,24,39,.04)}
+.optq{font-size:13px;color:var(--ink);font-weight:600;margin-bottom:8px}
+.optlist{display:flex;flex-direction:column;gap:8px}
+.optitem{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
+  border:1px solid var(--line2);background:#fff;border-radius:10px;padding:10px 12px;font:inherit;
+  transition:all .15s;position:relative}
+.optitem:active{background:var(--brand-soft)}
+.optitem .ol{font-size:14px;font-weight:600;color:var(--ink)}
+.optitem .od{font-size:11.5px;color:var(--gray2);line-height:1.4}
+.optitem.recommend{border-color:var(--brand);background:var(--brand-soft)}
+.optitem .otag{position:absolute;top:-8px;right:10px;background:var(--brand);color:#fff;
+  font-size:10px;padding:1px 7px;border-radius:8px}
+.optitem.other .ol{color:var(--gray2);font-weight:500}
+.optitem.chosen{background:var(--brand);border-color:var(--brand)}
+.optitem.chosen .ol,.optitem.chosen .od{color:#fff}
+.optitem.done{opacity:.45}
+
+/* ---------- 对话内实时预览 [artifact:] ---------- */
+.artcard{margin:9px 2px 2px;border:1px solid var(--line2);border-radius:var(--r-sm);
+  background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(17,24,39,.04)}
+.arth{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;
+  border-bottom:1px solid var(--line2);background:var(--brand-soft)}
+.arth .arti{font-size:13px;font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.arth .artk{font-size:11px;color:var(--brand);background:#fff;border:1px solid var(--brand-weak);
+  border-radius:8px;padding:1px 8px;flex:none;margin-left:8px}
+.artbar{display:flex;gap:8px;padding:8px 12px}
+.artbtn{flex:1;border:1px solid var(--line2);background:#fff;color:var(--ink);border-radius:9px;
+  padding:8px;font:inherit;font-size:13px;font-weight:600;transition:all .15s}
+.artbtn:active{background:var(--brand-soft)}
+
+.artoverlay{position:fixed;inset:0;z-index:120;background:#fff;display:flex;flex-direction:column;
+  animation:fadeIn .18s ease both}
+.artov-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line2);
+  background:#fff;padding-top:calc(10px + env(safe-area-inset-top))}
+.artov-head #artTitle{flex:1;min-width:0;font-size:15px;font-weight:700;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.artov-tabs{display:flex;gap:4px;flex:none}
+.arttab{border:1px solid var(--line2);background:#fff;color:var(--gray2);border-radius:8px;
+  padding:5px 12px;font:inherit;font-size:12px;font-weight:600}
+.arttab.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.artov-stage{flex:1;min-height:0;overflow:auto;background:#f6f8fc}
+.artframe{width:100%;height:100%;border:none;background:#fff}
+.artcode{margin:0;padding:14px;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+.artmd{padding:14px;font-size:14px;line-height:1.7;color:var(--ink)}
+
+/* ---------- 版本与更新 ---------- */
+.verbox{display:flex;flex-direction:column;gap:10px}
+.veritem{border:1px solid var(--line2);border-radius:var(--r-sm);padding:10px 12px;background:#fff}
+.verh{font-size:13.5px;font-weight:700;color:var(--ink);margin-bottom:6px}
+.verd{font-size:11px;color:var(--gray2);font-weight:400;margin-left:6px}
+.veritem ul{margin:0;padding-left:18px}
+.veritem li{font-size:12.5px;color:#4b5563;line-height:1.7}
+.verdetails{margin-top:10px}
+.verdetails summary{font-size:13px;color:var(--brand);font-weight:600;cursor:pointer;padding:4px 0}
