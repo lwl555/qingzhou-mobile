@@ -15,8 +15,14 @@ const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
 
 // 当前版本号（手机版）。更新日志手机版 / 电脑版分开记，App 内「版本与更新」各自展示。
-const APP_VERSION = '1.25.0';
+const APP_VERSION = '1.26.0';
 const PHONE_CHANGELOG = [
+  { v: '1.26.0', date: '2026-10-02', items: [
+    'AI 现在能直接把图片 / 视频 / 文件发到对话里（手机上也看得到）',
+    '远程连电脑时不再只给文件路径，图会直接贴出来',
+    '修复「电脑浏览器」面板一直报"电脑没回应"',
+    '对话里的大图不再撑爆本地缓存'
+  ] },
   { v: '1.25.0', date: '2026-10-01', items: [
     '对话内实时预览（Artifacts 式：HTML / 代码 / 图表可直接看效果）',
     '智能选择卡片（特定场景一键决策，不用逐字打字）',
@@ -29,6 +35,12 @@ const PHONE_CHANGELOG = [
   ] }
 ];
 const PC_CHANGELOG = [
+  { v: '1.26.0', date: '2026-10-02', items: [
+    '新增 send_file 工具：把本机文件直接发进对话，手机端同步可见',
+    'ai_image / ai_video / 网页截图自动贴进对话（不再只给一个路径）',
+    '修复浏览器启动卡死后取画面永久失败的问题（加了超时与重试）',
+    '电脑端对话里也能直接看图 / 看视频 / 看文件卡片'
+  ] },
   { v: '1.24.0', date: '2026-09-28', items: [
     '本地模型统一调度（含轻量模型自动优化）',
     '屏幕 OCR：截图 + 免费视觉模型读字',
@@ -233,6 +245,26 @@ function newSession() {
   state.sessionId = null;
   localStorage.setItem(CUR_KEY, state.cur.id);
 }
+/* localStorage 通常只有 5MB。AI 贴过来的图如果是内联 data URL（截图那种），
+   整张存进去几轮就把配额撑爆，之后所有会话都写不进去。所以落盘前把过大的内联图剔掉，
+   只留一条"这张图只在电脑上"的提示——内存里当前这轮显示不受影响。 */
+const MEDIA_PERSIST_MAX = 200000;
+function slimMediaList(list) {
+  return (list || []).map(m => {
+    const src = String(m.src || '');
+    if (src.startsWith('data:') && src.length > MEDIA_PERSIST_MAX) return Object.assign({}, m, { src: '', dropped: true });
+    return m;
+  });
+}
+function slimSessions(all) {
+  return (all || []).map(s => {
+    if (!s || !Array.isArray(s.msgs)) return s;
+    if (!s.msgs.some(m => m && m.media)) return s;
+    return Object.assign({}, s, {
+      msgs: s.msgs.map(m => (m && m.media) ? Object.assign({}, m, { media: slimMediaList(m.media) }) : m)
+    });
+  });
+}
 function persist() {
   if (!state.cur) return;
   state.cur.updatedAt = Date.now();
@@ -244,7 +276,7 @@ function persist() {
   const i = all.findIndex(s => s.id === state.cur.id);
   if (i >= 0) all[i] = state.cur; else all.unshift(state.cur);
   all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  writeSessions(all);
+  writeSessions(slimSessions(all));
   localStorage.setItem(CUR_KEY, state.cur.id);
 }
 function loadCur() {
@@ -412,9 +444,13 @@ function renderCur() {
         addActions(el);
       } else {
         const el = addMsg('ai', '');
-        el.querySelector('.bub').innerHTML = md(m.content || '');
+        const bub = el.querySelector('.bub');
+        bub.innerHTML = md(m.content || '');
+        // 只有媒体、没有文字时不留一个空气泡
+        if (!String(m.content || '').trim()) bub.classList.add('empty');
         if (m.artifact) renderArtifactCard(el, m.artifact);
         if (m.options) renderOptionsCard(el, m.options);
+        if (m.media) for (const mm of m.media) renderMediaCard(el, mm);
         addActions(el);
       }
     }
@@ -607,6 +643,7 @@ function chatRemote(text, onDelta, onSync, image, model, regenerate, onStep) {
       else if (t === 'tool_start') { if (onStep) onStep(payload.name || '工具', 'run', payload.preview || ''); }
       else if (t === 'tool_result') { if (onStep) onStep(payload.name || '工具', 'done', payload.summary || '', payload.ok); }
       else if (t === 'approval_request') onDelta('\n[需要你在电脑上点一下确认]\n');
+      else if (t === 'media' || t === 'media_begin' || t === 'media_part' || t === 'media_end') recvMediaEvent(payload);
       else if (t === 'error') {
         if (typeof payload.full === 'string') onSync(payload.full);
         else onDelta('\n[电脑端出错] ' + (payload.text || payload.message || '未知错误'));
@@ -700,6 +737,7 @@ async function runChat(text, img, isRegen) {
   const el = addMsg('ai', '', { thinking: true });
   const bub = el.querySelector('.bub');
   let acc = '';
+  mediaSink = { el, list: [] };   // 本轮电脑发过来的图片/文件挂这儿
   const paint = () => { bub.innerHTML = md(acc); scrollBottom(); };
   try {
     // 带图轮：电脑上的本地模型基本是纯文本，图片统一交给云端视觉模型识别（三种模式都通）
@@ -782,7 +820,7 @@ async function runChat(text, img, isRegen) {
   // 解析结构化标记：把 [options:...] 选择卡片 / [artifact:...] 预览从正文里抠出来，
   // 转成结构化卡片，避免历史里留一堆机器标记。
   if (!stopped) {
-    const am = [...(state.cur.msgs || [])].reverse().find(x => x.role === 'assistant' && !/^\[media:/.test(x.content || ''));
+    const am = [...(state.cur.msgs || [])].reverse().find(x => x.role === 'assistant' && !x.media && !/^\[media:/.test(x.content || ''));
     const art = takeArtifactMark(acc), om = takeOptionsMark(acc);
     if (am) {
       if (art) { acc = art.clean; am.content = acc; am.artifact = art; }
@@ -791,6 +829,18 @@ async function runChat(text, img, isRegen) {
     if (art || om) { bub.innerHTML = md(acc); persist(); }
     if (art) renderArtifactCard(el, art);
     if (om) renderOptionsCard(el, om.data);
+  }
+  // 本轮收到的媒体（电脑发过来的图/视频/文件）：挂到最后一条 AI 消息上，
+  // 这样"文字在上、媒体在下"的顺序刷新后也保持一致。
+  if (mediaSink) {
+    if (!stopped && mediaSink.list.length) {
+      const list = mediaSink.list;
+      const last = state.cur.msgs[state.cur.msgs.length - 1];
+      if (last && last.role === 'assistant' && !last.media && !/^\[media:/.test(last.content || '')) last.media = list;
+      else state.cur.msgs.push({ role: 'assistant', content: '', media: list });
+      persist();
+    }
+    mediaSink = null;
   }
   if (!stopped) addActions(el);
   streaming = false; setBusy(false); streamStop = null; clearAttach(); scrollBottom();
@@ -832,6 +882,7 @@ async function chatLan(text, onDelta, image, signal, regenerate) {
         const ev = JSON.parse(String(p).slice(6));
         if (ev.type === 'session') state.sessionId = ev.sessionId;
         else if (ev.type === 'delta') onDelta(ev.text || '');
+        else if (ev.type === 'media') recvMediaEvent(ev);
         else if (ev.type === 'error') onDelta('\n[电脑端出错] ' + ev.message);
       } catch {}
     }
@@ -1024,20 +1075,100 @@ function addActions(el) {
   if (!el || el.querySelector('.mact')) return;
   const bar = document.createElement('div');
   bar.className = 'mact';
+  const bubbleText = () => { const b = el.querySelector('.bub'); return b ? b.innerText : ''; };
   const cp = document.createElement('button');
   cp.type = 'button'; cp.textContent = '复制';
   cp.onclick = () => {
-    const t = el.querySelector('.bub').innerText;
+    const t = bubbleText();
     try { navigator.clipboard.writeText(t); toast('已复制'); } catch { toast('复制失败'); }
   };
   const sp = document.createElement('button');
   sp.type = 'button'; sp.textContent = '朗读'; sp.dataset.speak = '0';
-  sp.onclick = () => toggleSpeak(sp, el.querySelector('.bub').innerText);
+  sp.onclick = () => toggleSpeak(sp, bubbleText());
   const rg = document.createElement('button');
   rg.type = 'button'; rg.textContent = '重新生成';
   rg.onclick = () => { stopSpeak(); regenerate(el); };
   bar.appendChild(cp); bar.appendChild(sp); bar.appendChild(rg);
   el.appendChild(bar);
+}
+
+/* ================= 对话内媒体：AI 把图片 / 视频 / 文件发到对话里 =================
+   来源三条路：电脑网页不用管；手机这边是 ①局域网 SSE ②远程中继（大的内联图会被电脑端
+   切成 300KB 一片发过来，这里按 id 重组）。渲染成气泡**下方**的媒体卡，
+   故意不放进 .bub——打字机每帧整段重绘 .bub，放里面会被冲掉。 */
+let mediaSink = null;              // { el, list } —— 本轮 AI 消息的媒体挂载点
+const mediaParts = new Map();      // 分片重组：id -> { meta, parts, n, got, ts }
+
+function humanSizeP(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+function renderMediaCard(el, m) {
+  if (!el || !m) return;
+  let box = el.querySelector('.mediabox');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'mediabox';
+    const act = el.querySelector('.mact');
+    if (act) el.insertBefore(box, act); else el.appendChild(box);
+  }
+  const kind = m.kind || 'file';
+  const src = String(m.src || '');
+  const card = document.createElement('div');
+  card.className = 'mediacard';
+  if (m.dropped || !src) {
+    card.innerHTML = `<div class="filecard"><span class="fi">🖼</span><div class="fm"><b>${esc(m.name || '媒体')}</b>`
+      + `<span>${m.path ? '在电脑上 · ' : ''}这张图太大，没缓存在手机里</span></div></div>`
+      + (m.path ? `<div class="fpath">${esc(m.path)}</div>` : '');
+  } else if (kind === 'image') {
+    card.innerHTML = `<img class="media" src="${esc(src)}" alt="${esc(m.name || '图片')}">`;
+  } else if (kind === 'video') {
+    card.innerHTML = `<video class="media" src="${esc(src)}" controls playsinline webkit-playsinline preload="metadata"></video>`;
+  } else if (kind === 'audio') {
+    card.innerHTML = `<audio src="${esc(src)}" controls style="width:100%"></audio>`;
+  } else {
+    card.innerHTML = `<div class="filecard"><span class="fi">📄</span><div class="fm"><b>${esc(m.name || '文件')}</b>`
+      + `<span>${esc(humanSizeP(m.size))}${m.path ? ' · 在电脑上' : ''}</span></div></div>`
+      + (m.path ? `<div class="fpath">${esc(m.path)}</div>` : '');
+  }
+  if (m.caption) card.insertAdjacentHTML('beforeend', `<div class="mcap">${esc(m.caption)}</div>`);
+  box.appendChild(card);
+  scrollBottom();
+}
+function recvMedia(m) {
+  if (!mediaSink) return;
+  mediaSink.list.push(m);
+  renderMediaCard(mediaSink.el, m);
+}
+function recvMediaEvent(p) {
+  if (!p) return;
+  const t = p.type;
+  if (t === 'media') { recvMedia(p); return; }
+  if (t === 'media_begin') {
+    // 顺手清掉 60 秒还没凑齐的残片（丢包兜底）
+    const now = Date.now();
+    for (const [k, v] of mediaParts) if (now - v.ts > 60000) mediaParts.delete(k);
+    mediaParts.set(p.id, {
+      n: Number(p.parts) || 0, got: 0, ts: now, parts: new Array(Number(p.parts) || 0),
+      meta: { kind: p.kind, name: p.name, mime: p.mime, size: p.size, caption: p.caption, path: p.path }
+    });
+    return;
+  }
+  if (t === 'media_part') {
+    const b = mediaParts.get(p.id); if (!b) return;
+    if (b.parts[p.i] == null) b.got++;
+    b.parts[p.i] = p.data;
+    b.ts = Date.now();
+    return;
+  }
+  if (t === 'media_end') {
+    const b = mediaParts.get(p.id); if (!b) return;
+    mediaParts.delete(p.id);
+    if (b.got < b.n) return;            // 缺片：宁可不显示，也别贴一张坏图
+    recvMedia(Object.assign({}, b.meta, { src: b.parts.join('') }));
+  }
 }
 
 /* ================= TTS 朗读（APK 用原生插件，网页用 speechSynthesis） ================= */
@@ -1679,14 +1810,19 @@ function vpMsg(s) { const m = $('#vpMsg'); if (m) { m.textContent = s || ''; m.s
 async function vpFetch() {
   if (state.mode !== 'remote') { vpMsg('只有「远程连上电脑」才能看电脑浏览器的画面。'); return; }
   try {
-    const r = await remoteQuery({ cmd: 'browser_view' }, 'browser_view', 25000);
+    // 电脑第一次取画面要现启动浏览器（最多约 20s），所以给足 35s，别提前判"电脑没回应"
+    const r = await remoteQuery({ cmd: 'browser_view' }, 'browser_view', 35000);
     if (!r.ok) { vpMsg(r.error || '取画面失败'); return; }
     const img = $('#vpImg');
     img.src = r.dataUrl;
     img.style.display = 'block';
     vpMsg('');
     $('#vpUrl').textContent = (r.title ? r.title + ' · ' : '') + (r.url || '（空白页）');
-  } catch (e) { vpMsg('取画面失败：' + e.message); }
+  } catch (e) {
+    vpMsg(/电脑没回应/.test(e.message || '')
+      ? '取画面失败：电脑没回应。电脑上轻舟还在跑吗？电脑端「远程操作」开着的话，再点「刷新」试试（第一次启动浏览器会慢些）。'
+      : '取画面失败：' + e.message);
+  }
 }
 async function vpTouch(o) {
   if (state.mode !== 'remote') { toast('要先远程连上电脑'); return null; }
