@@ -689,7 +689,12 @@ async function runChat(text, img, isRegen) {
     } else if (state.mode === 'lan') {
       await chatLan(text, d => { acc += d; tickRate(d.length); paint(); }, img, ctl.signal, isRegen);
       if (!acc && !stopped) acc = '(没有回复)';
-      paint(); if (acc) { pushAI(acc); persist(); }
+      const gl = takeGenMark(acc);
+      // 兜底：电脑没真生成（回复里没 [media:...]）却带了生成标记，手机端自己走云模型补上
+      if (gl && gl.prompt && !stopped && !/\[media:(image|video)\]/.test(acc)) {
+        acc = gl.clean; paint(); pushAI(acc); persist();
+        await genAndShow(gl.type, gl.prompt);
+      } else { paint(); if (acc) { pushAI(acc); persist(); } }
     } else {
       // 流程卡：电脑端每执行一个工具，就在 AI 消息下方实时显示"工具名 + 执行中/结果摘要"
       let stepCard = null;
@@ -729,8 +734,15 @@ async function runChat(text, img, isRegen) {
       remoteStopFn = r.stop;
       await r.promise;
       if (!acc && !stopped) acc = '(电脑没有回复)';
-      paint();
-      if (acc && !r.ctl.errored && !stopped) { pushAI(acc); persist(); }
+      const g = takeGenMark(acc);
+      // 兜底：电脑没真生成却带了生成标记，手机端自己走云模型补上（双保险，不依赖电脑工具链）
+      if (g && g.prompt && !stopped && !/\[media:(image|video)\]/.test(acc)) {
+        acc = g.clean; paint(); pushAI(acc); persist();
+        await genAndShow(g.type, g.prompt);
+      } else {
+        paint();
+        if (acc && !r.ctl.errored && !stopped) { pushAI(acc); persist(); }
+      }
     }
   } catch (e) {
     if (stopped) { if (!acc) { acc = '(已停止)'; paint(); } }
@@ -1209,8 +1221,9 @@ function stopVoice() {
 $('#micBtn').onclick = startVoice;
 $('#attBtn').onclick = () => $('#fileInput').click();
 /* 生成图片/视频：手机上不再有按钮，全部由 AI 决定。
-   云端模式没有工具可调，所以让模型在回复里带标记，前端识别后执行。
-   远程/局域网模式则交给电脑用的 ai_image / ai_video 工具（走在线模型，不依赖本地下载）。 */
+   云端模式让模型在回复里带 [[生成图片]] 标记，前端识别后走云模型执行。
+   远程/局域网模式优先交给电脑的 ai_image / ai_video 工具（走在线模型）；
+   若电脑没真生成（回复只带标记没带 [media:]），手机端兜底走云模型补上，双保险。 */
 async function genAndShow(type, prompt) {
   showMsgs();
   const el = addMsg('ai', '', { thinking: true });
