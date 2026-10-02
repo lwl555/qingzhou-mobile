@@ -13,6 +13,33 @@ const CLOUD = {
 };
 const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
+
+// 当前版本号（手机版）。更新日志手机版 / 电脑版分开记，App 内「版本与更新」各自展示。
+const APP_VERSION = '1.25.0';
+const PHONE_CHANGELOG = [
+  { v: '1.25.0', date: '2026-10-01', items: [
+    '对话内实时预览（Artifacts 式：HTML / 代码 / 图表可直接看效果）',
+    '智能选择卡片（特定场景一键决策，不用逐字打字）',
+    '版本更新信息展示（手机版与电脑版分开记录）',
+    '全新应用图标（Muse 风格 AI 角色）'
+  ] },
+  { v: '1.24.1', date: '2026-09-30', items: [
+    '远程 / 局域网模式图片视频生成兜底（电脑没生成时手机侧走云模型）',
+    '浏览器遥控面板、原生推送、停止生成'
+  ] }
+];
+const PC_CHANGELOG = [
+  { v: '1.24.0', date: '2026-09-28', items: [
+    '本地模型统一调度（含轻量模型自动优化）',
+    '屏幕 OCR：截图 + 免费视觉模型读字',
+    '图片 / 视频生成子系统',
+    '远程操作：在外面也能指挥电脑'
+  ] },
+  { v: '1.23.0', date: '2026-09-22', items: [
+    '技能系统：内置技能包、连接性 / 安全增强',
+    '云端代理 agnes-proxy 接入'
+  ] }
+];
 // 代理根地址（去掉 chat 后缀）：图片/视频/轮询都走这里，密钥由代理保管
 const CLOUD_API = CLOUD.url.replace(/\/v1\/chat\/completions$/, '');
 const GEN = { imageModel: 'agnes-image-2.5-flash', videoModel: 'agnes-video-2.5-flash' };
@@ -334,6 +361,7 @@ async function boot() {
   renderCur();
   renderList();
   fillModels();
+  renderVersion();
 
   if (state.ip) {
     setMode('cloud', '正在找电脑…');
@@ -384,7 +412,9 @@ function renderCur() {
         addActions(el);
       } else {
         const el = addMsg('ai', '');
-        el.querySelector('.bub').innerHTML = md(m.content);
+        el.querySelector('.bub').innerHTML = md(m.content || '');
+        if (m.artifact) renderArtifactCard(el, m.artifact);
+        if (m.options) renderOptionsCard(el, m.options);
         addActions(el);
       }
     }
@@ -749,6 +779,19 @@ async function runChat(text, img, isRegen) {
     else { acc = '出错：' + e.message; paint(); }
   }
   stopRate(); setStatus('');
+  // 解析结构化标记：把 [options:...] 选择卡片 / [artifact:...] 预览从正文里抠出来，
+  // 转成结构化卡片，避免历史里留一堆机器标记。
+  if (!stopped) {
+    const am = [...(state.cur.msgs || [])].reverse().find(x => x.role === 'assistant' && !/^\[media:/.test(x.content || ''));
+    const art = takeArtifactMark(acc), om = takeOptionsMark(acc);
+    if (am) {
+      if (art) { acc = art.clean; am.content = acc; am.artifact = art; }
+      if (om) { acc = om.clean; am.content = acc; am.options = om.data; }
+    }
+    if (art || om) { bub.innerHTML = md(acc); persist(); }
+    if (art) renderArtifactCard(el, art);
+    if (om) renderOptionsCard(el, om.data);
+  }
   if (!stopped) addActions(el);
   streaming = false; setBusy(false); streamStop = null; clearAttach(); scrollBottom();
 }
@@ -1692,3 +1735,125 @@ $('#vpEnter') && ($('#vpEnter').onclick = async () => { await vpTouch({ action: 
 
 renderAvatar(); fillPresets();
 boot();
+
+/* ================= 智能选择卡片 [options:JSON] ================= */
+// 从回复里抠出选择卡片的 JSON（单行、括号配平，内容里有 ] 也不怕）
+function extractJsonBlock(s, startIdx) {
+  if (s[startIdx] !== '{') return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = startIdx; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return { end: i, json: s.slice(startIdx, i + 1) }; }
+  }
+  return null;
+}
+function takeOptionsMark(s) {
+  const m = String(s || '').match(/\[options:\s*/);
+  if (!m) return null;
+  const idx = m.index + m[0].length;
+  if (s[idx] !== '{') return null;
+  const blk = extractJsonBlock(s, idx);
+  if (!blk) return null;
+  let data; try { data = JSON.parse(blk.json); } catch { return null; }
+  if (!data || !Array.isArray(data.items) || !data.items.length) return null;
+  const clean = (s.slice(0, m.index) + s.slice(blk.end + 1)).trim();
+  return { data, clean };
+}
+function chooseOption(v) {
+  const t = String(v || '').trim();
+  if (!t || streaming) return;
+  showMsgs();
+  addMsg('me', t); pushUser(t); lastUserText = t;
+  runChat(t, null, false);
+}
+function renderOptionsCard(el, data) {
+  if (!el || el.querySelector('.optcard')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'optcard';
+  let html = '';
+  if (data.q) html += `<div class="optq">${esc(data.q)}</div>`;
+  html += '<div class="optlist">';
+  for (const it of data.items.slice(0, 8)) {
+    const label = it.label || it.value || '';
+    const desc = it.desc || '';
+    const rec = it.rec || it.recommend ? ' recommend' : '';
+    const val = it.value != null ? it.value : label;
+    html += `<button type="button" class="optitem${rec}" data-v="${esc(val)}"><span class="ol">${esc(label)}</span>${desc ? `<span class="od">${esc(desc)}</span>` : ''}${rec ? '<span class="otag">推荐</span>' : ''}</button>`;
+  }
+  html += `<button type="button" class="optitem other" data-other="1"><span class="ol">其他</span><span class="od">我来打字说</span></button>`;
+  html += '</div>';
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('.optitem').forEach(b => {
+    b.onclick = () => {
+      if (b.dataset.other) { txt.focus(); txt.scrollIntoView({ block: 'center' }); return; }
+      wrap.querySelectorAll('.optitem').forEach(x => x.classList.add('done'));
+      b.classList.add('chosen');
+      chooseOption(b.dataset.v);
+    };
+  });
+  el.appendChild(wrap);
+}
+
+/* ================= 对话内实时预览 [artifact:类型|标题]\n内容\n[/artifact] ================= */
+function takeArtifactMark(s) {
+  const m = String(s || '').match(/\[artifact:([a-z]+)\|([^\]\n]*)\]\n([\s\S]*?)\n\[\/artifact\]/i);
+  if (!m) return null;
+  const type = m[1].toLowerCase();
+  const title = m[2].trim();
+  const content = m[3];
+  const clean = (s.slice(0, m.index) + s.slice(m.index + m[0].length)).trim();
+  return { type, title, content, clean };
+}
+function renderArtifactCard(el, art) {
+  if (!el || el.querySelector('.artcard')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'artcard';
+  const kind = ({ html: '网页', svg: '图形', code: '代码', md: '文档', text: '文本' })[art.type] || '内容';
+  const title = art.title || (kind + '预览');
+  wrap.innerHTML = `<div class="arth"><span class="arti">📄 ${esc(title)}</span><span class="artk">${kind}</span></div>
+    <div class="artbar">
+      <button type="button" class="artbtn preview">预览</button>
+      <button type="button" class="artbtn code">代码</button>
+    </div>`;
+  wrap.querySelector('.preview').onclick = () => openArtifact(art, 'preview');
+  wrap.querySelector('.code').onclick = () => openArtifact(art, 'code');
+  el.appendChild(wrap);
+}
+function openArtifact(art, tab) {
+  const ov = $('#artOverlay'); if (!ov) return;
+  ov.hidden = false;
+  const t = $('#artTitle'); if (t) t.textContent = art.title || '预览';
+  const stage = $('#artStage'); if (!stage) return;
+  const show = (which) => {
+    stage.innerHTML = '';
+    if (which === 'preview' && (art.type === 'html' || art.type === 'svg')) {
+      const f = document.createElement('iframe');
+      f.className = 'artframe';
+      f.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+      f.srcdoc = art.content;
+      stage.appendChild(f);
+    } else if (which === 'preview' && art.type === 'md') {
+      const d = document.createElement('div'); d.className = 'artmd'; d.innerHTML = md(art.content); stage.appendChild(d);
+    } else {
+      const pre = document.createElement('pre'); pre.className = 'artcode'; pre.textContent = art.content; stage.appendChild(pre);
+    }
+    ov.querySelectorAll('.arttab').forEach(x => x.classList.toggle('on', x.dataset.tab === which));
+  };
+  ov.querySelectorAll('.arttab').forEach(x => x.onclick = () => show(x.dataset.tab));
+  show(tab || 'preview');
+}
+
+/* ================= 版本与更新（手机版 / 电脑版分开） ================= */
+function renderVersion() {
+  const now = $('#verNow'); if (now) now.textContent = APP_VERSION;
+  const box = $('#verPhone'); if (box) {
+    box.innerHTML = PHONE_CHANGELOG.map(c => `<div class="veritem"><div class="verh">手机版 v${c.v} <span class="verd">${c.date}</span></div><ul>${c.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('');
+  }
+  const pc = $('#verPc'); if (pc) {
+    pc.innerHTML = PC_CHANGELOG.map(c => `<div class="veritem"><div class="verh">电脑版 v${c.v} <span class="verd">${c.date}</span></div><ul>${c.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('');
+  }
+}
+$('#artClose') && ($('#artClose').onclick = () => { const o = $('#artOverlay'); if (o) o.hidden = true; });
