@@ -15,8 +15,14 @@ const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
 
 // 当前版本号（手机版）。更新日志手机版 / 电脑版分开记，App 内「版本与更新」各自展示。
-const APP_VERSION = '1.26.0';
+const APP_VERSION = '1.26.1';
 const PHONE_CHANGELOG = [
+  { v: '1.26.1', date: '2026-10-03', items: [
+    '修复云端对话与生图全部不可用（云端代理域名失效）',
+    '生图/生视频改为跟随你选的服务商，不再写死内置代理',
+    '内置代理连不上时会明确提示怎么改，不再只报错',
+    '新增「Agnes 直连」模板 + 可从电脑一键取密钥'
+  ] },
   { v: '1.26.0', date: '2026-10-02', items: [
     'AI 现在能直接把图片 / 视频 / 文件发到对话里（手机上也看得到）',
     '远程连电脑时不再只给文件路径，图会直接贴出来',
@@ -75,6 +81,9 @@ function allCustom() {
 }
 function saveCustom(a) { try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(a)); } catch {} }
 const MODEL_PRESETS = [
+  // 放第一个：内置云端代理走的是 Supabase 函数域名，国内网络有访问不到的情况，
+  // 这时直接选" Agnes 直连"填上自己的 Key 就能立刻恢复（对话和生图都会跟着走）。
+  { name: 'Agnes 直连', baseUrl: 'https://api.agnes-ai.cn/v1', model: 'agnes-2.0-flash' },
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
   { name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4.6' },
@@ -84,13 +93,32 @@ const MODEL_PRESETS = [
   { name: '本地 Ollama', baseUrl: 'http://localhost:11434/v1', model: 'qwen3:8b' }
 ];
 // 当前云端走哪个：内置 agnes 模型名，或 custom:<id>
+// 注意 genBase：生图/生视频的地址前缀。内置代理和自建服务商的地址约定不一样——
+//   内置代理  .../agnes-proxy      + /v1/images/generations
+//   Agnes 直连 https://api.agnes-ai.cn/v1 + /images/generations
+// 所以这里算成"再加一段就是完整地址"的前缀，两边都能对上。
 function activeCloud() {
   const m = state.cloudModel || CLOUD.model;
   if (String(m).indexOf('custom:') === 0) {
     const c = allCustom().find(x => x.id === m.slice(7));
-    if (c) return { url: String(c.baseUrl).replace(/\/+$/, '') + '/chat/completions', key: c.key || '', model: c.model, name: c.name };
+    if (c) {
+      const base = String(c.baseUrl).replace(/\/+$/, '');
+      return { url: base + '/chat/completions', genBase: base, key: c.key || '', model: c.model, name: c.name, custom: true };
+    }
   }
-  return { url: CLOUD.url, key: CLOUD.key, model: m, name: m };
+  return { url: CLOUD.url, genBase: CLOUD_API + '/v1', key: CLOUD.key, model: m, name: m, custom: false };
+}
+/* 统一发请求：把 "Failed to fetch" 这种看不懂的报错换成能动手解决的话。
+   （2026-10-03 踩到：云端代理域名整个不可达，用户只看到"连不上"，不知道能怎么办） */
+async function cloudFetch(url, opts, label) {
+  let r;
+  try {
+    r = await fetch(url, opts);
+  } catch (e) {
+    const hint = '可到「连接/我的 → 模型 → 手动接入」填你自己的服务商（比如 Agnes 直连 https://api.agnes-ai.cn/v1）。';
+    throw new Error(`连不上${label || '云端服务'}（网络不通，或这个服务地址已经失效）。${hint}`);
+  }
+  return r;
 }
 async function testCustom(c) {
   const url = String(c.baseUrl).replace(/\/+$/, '') + '/chat/completions';
@@ -186,13 +214,14 @@ function renderActs() {
   }).join('');
 }
 
-// 云端图片生成：返回图片 URL
+// 云端图片生成：返回图片 URL（走当前选的云端服务商，不再写死内置代理）
 async function createImage(prompt) {
-  const r = await fetch(CLOUD_API + '/v1/images/generations', {
+  const cf = activeCloud();
+  const r = await cloudFetch(cf.genBase + '/images/generations', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
     body: JSON.stringify({ model: GEN.imageModel, prompt, n: 1 })
-  });
+  }, '图片服务');
   const j = await r.json().catch(() => null);
   if (!r.ok || !j) throw new Error('图片生成失败（' + r.status + '）' + (j?.error?.message || ''));
   const url = j?.data?.[0]?.url;
@@ -202,12 +231,13 @@ async function createImage(prompt) {
 
 // 云端视频生成：异步任务，轮询直到完成，返回视频 URL
 async function createVideo(prompt, onStatus) {
+  const cf = activeCloud();
   const model = GEN.videoModel;
-  const r = await fetch(CLOUD_API + '/v1/videos', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key },
+  const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key };
+  const r = await cloudFetch(cf.genBase + '/videos', {
+    method: 'POST', headers: H,
     body: JSON.stringify({ model, prompt, mode: 'text', seconds: '5', aspect_ratio: '16:9' })
-  });
+  }, '视频服务');
   const j = await r.json().catch(() => null);
   if (!r.ok || !j) throw new Error('视频任务创建失败（' + r.status + '）' + (j?.error?.message || ''));
   const vid = j?.video_id || j?.task_id || j?.id;
@@ -215,9 +245,9 @@ async function createVideo(prompt, onStatus) {
   const deadline = Date.now() + 4 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise(res => setTimeout(res, 4000));
-    const pr = await fetch(CLOUD_API + '/agnesapi?video_id=' + encodeURIComponent(vid) + '&model_name=' + encodeURIComponent(model), {
-      headers: { Authorization: 'Bearer ' + CLOUD.key, apikey: CLOUD.key }
-    });
+    const pr = await cloudFetch(cf.genBase + '/agnesapi?video_id=' + encodeURIComponent(vid) + '&model_name=' + encodeURIComponent(model), {
+      headers: H
+    }, '视频服务');
     const pj = await pr.json().catch(() => null);
     const st = pj?.status;
     if (onStatus) onStatus(pj?.progress || 0, st);
@@ -962,15 +992,16 @@ async function chatCloud(messages, signal, image) {
   const cf = activeCloud();
   let r;
   try {
-    r = await fetch(cf.url, {
+    r = await cloudFetch(cf.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cf.key, apikey: cf.key },
       body: JSON.stringify({ model: cf.model, messages: [{ role: 'system', content: sysPrompt() }, ...hist] }),
       signal
-    });
+    }, '「' + cf.name + '」');
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new Error('连不上「' + cf.name + '」（' + (e.message || '网络错误') + '）');
+    throw e instanceof Error && /连不上/.test(e.message) ? e
+      : new Error('连不上「' + cf.name + '」（' + (e.message || '网络错误') + '）');
   }
   const j = await r.json().catch(() => null);
   if (!r.ok || !j) {
@@ -1725,10 +1756,38 @@ $('#cmPreset') && ($('#cmPreset').onchange = e => {
   const i = e.target.value; if (i === '') return;
   const p = MODEL_PRESETS[+i]; if (!p) return;
   $('#cmName').value = p.name; $('#cmBase').value = p.baseUrl; $('#cmModel').value = p.model; $('#cmKey').value = '';
-  mlog(`已填入「${p.name}」的地址和模型名，只差 API Key。`);
+  // 选了 Agnes 直连就把"从电脑取密钥"的按钮亮出来（省得手打 51 个字符）
+  const row = $('#cmKeyRow');
+  if (row) row.hidden = !/agnes/i.test(p.name + p.baseUrl);
+  mlog(/agnes/i.test(p.name + p.baseUrl)
+    ? `已填入「${p.name}」的地址和模型名。Key 可以点「从电脑取 Agnes 密钥」，或自己粘贴。`
+    : `已填入「${p.name}」的地址和模型名，只差 API Key。`);
 });
 $('#modelAddBtn') && ($('#modelAddBtn').onclick = () => { $('#modelForm').hidden = false; mlog(''); });
 $('#cmCancelBtn') && ($('#cmCancelBtn').onclick = () => { $('#modelForm').hidden = true; mlog(''); });
+
+/* 从电脑把已配好的 Agnes 密钥取过来（走远程中继）。
+   为什么要这个：电脑端只显示脱敏密钥，手机上手打 51 个字符太痛苦；
+   而 2026-10-03 云端代理域名失效后，手机想自己接 Agnes 就必须有这个 Key。 */
+$('#cmKeyPcBtn') && ($('#cmKeyPcBtn').onclick = async () => {
+  if (state.mode !== 'remote') { mlog('要先在「连接」里连上电脑（远程），才能从电脑取密钥。'); return; }
+  if (!rChannel) { mlog('还没连上电脑。'); return; }
+  mlog('正在从电脑取密钥…');
+  try {
+    const r = await remoteQuery({ cmd: 'export_key', providerId: 'agnes' }, 'key', 20000);
+    if (!r.ok) { mlog('没取到：' + (r.error || '未知原因')); return; }
+    const k = String(r.key || '').trim();
+    if (!k) { mlog('没取到：电脑上还没配 Agnes 的 Key。'); return; }
+    $('#cmKey').value = k;
+    if (!$('#cmName').value) $('#cmName').value = 'Agnes 直连';
+    if (!$('#cmBase').value) $('#cmBase').value = 'https://api.agnes-ai.cn/v1';
+    if (!$('#cmModel').value) $('#cmModel').value = 'agnes-2.0-flash';
+    mlog('取到了，密钥已填入（只存在这台手机上）。点「保存并测试」即可。');
+    toast('密钥已从电脑取来');
+  } catch (e) {
+    mlog('取密钥失败：' + e.message);
+  }
+});
 $('#cmSaveBtn') && ($('#cmSaveBtn').onclick = async () => {
   const c = {
     id: 'm' + Date.now().toString(36),
