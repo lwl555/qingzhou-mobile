@@ -386,3 +386,18 @@ body{background:var(--bg);color:var(--ink);
 .veritem li{font-size:12.5px;color:#4b5563;line-height:1.7}
 .verdetails{margin-top:10px}
 .verdetails summary{font-size:13px;color:var(--brand);font-weight:600;cursor:pointer;padding:4px 0}
+
+/* ---------- 对话内媒体卡：AI 把图/视频/文件发到对话里（挂在气泡下方） ---------- */
+.mediabox{margin-top:6px;display:flex;flex-direction:column;gap:6px}
+.mediacard{border:1px solid var(--line2);border-radius:12px;overflow:hidden;background:#fff;max-width:100%}
+.mediabox .media{display:block;width:100%;max-width:100%;border-radius:0;margin:0;background:#f3f4f6}
+.mediabox video.media{max-height:340px;object-fit:contain;background:#000}
+.mediabox audio{display:block;padding:10px}
+.mediacard .mcap{font-size:12px;color:var(--gray2);padding:7px 10px;border-top:1px solid var(--line2);line-height:1.5}
+.filecard{display:flex;align-items:center;gap:10px;padding:11px 12px}
+.filecard .fi{font-size:22px;line-height:1}
+.filecard .fm{display:flex;flex-direction:column;min-width:0}
+.filecard .fm b{font-size:13.5px;color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filecard .fm span{font-size:11.5px;color:var(--gray2);margin-top:2px}
+.mediacard .fpath{font-size:11px;color:var(--gray2);padding:0 12px 10px;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
+.msg .bub.empty{display:none}
