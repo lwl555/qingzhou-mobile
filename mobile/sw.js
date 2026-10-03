@@ -1,8 +1,43 @@
-/* 轻舟 Service Worker：只干两件事——接收推送、点了通知打开页面。
-   不做离线缓存（网页版要连云端/电脑，缓存旧页面反而容易出错）。 */
+/* 轻舟 Service Worker：① 推送接收 ② 应用外壳离线缓存（仅静态资源，不缓存接口/云端响应） */
+const SHELL = 'qz-shell-v1';
+const SHELL_ASSETS = [
+  './', './index.html', './app.js', './style.css', './manifest.webmanifest',
+  './icons/icon-192.png', './icons/icon-512.png', './icons/onboard-cloud.png'
+];
 
-self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('install', e => {
+  self.skipWaiting();
+  e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_ASSETS).catch(() => {})).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== SHELL).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+// 只缓存同源静态资源；API / 远程中继 / 跨域一律走网络，避免把旧页面或接口响应存下来
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.endsWith('/api/') || url.pathname.includes('/api/')) return;
+  e.respondWith(
+    caches.match(req).then(cached => {
+      const network = fetch(req).then(res => {
+        if (res && res.status === 200 && res.type === 'basic') {
+          const cp = res.clone();
+          caches.open(SHELL).then(c => c.put(req, cp)).catch(() => {});
+        }
+        return res;
+      }).catch(() => cached);
+      return cached || network;
+    })
+  );
+});
 
 self.addEventListener('push', e => {
   let data = {};
