@@ -195,6 +195,15 @@
     <button id="vpType" class="primary" type="button">输入</button>
     <button id="vpEnter" type="button">回车</button>
   </div>
+  <div class="vp-bar">
+    <input id="vpUrlInput" placeholder="输入网址，如 https://item.jd.com/1.html">
+    <button id="vpOpenUrl" class="primary" type="button">打开</button>
+    <button id="vpRead" type="button">读内容</button>
+  </div>
+  <div class="vp-bar">
+    <button id="vpRun" type="button">让 AI 操作</button>
+  </div>
+  <div class="vp-brief" id="vpBrief" hidden style="white-space:pre-wrap;font-size:12px;color:var(--gray2);max-height:180px;overflow:auto;background:#f6f8fb;padding:8px;border-radius:8px;margin-top:8px"></div>
   <div class="vp-hint">先点画面上的输入框，再在下面输入；点画面任意处就是点击。登录完关掉就行。</div>
 </div>
 
@@ -281,5 +290,10 @@
 <!-- 远程功能需要用到实时通道组件；加载失败也不影响局域网和云端两种模式 -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.min.js"></script>
 <script src="./app.js"></script>
+<div id="installBar" style="display:none;position:fixed;left:0;right:0;bottom:0;background:#1d4ed8;color:#fff;padding:10px 14px;align-items:center;gap:10px;z-index:9999;font-size:14px;box-shadow:0 -2px 10px rgba(0,0,0,.2)">
+  <span style="flex:1">把轻舟装到桌面，像 App 一样随时打开</span>
+  <button id="installBtn" style="background:#fff;color:#1d4ed8;border:0;border-radius:8px;padding:6px 12px;font-weight:600">安装</button>
+  <button id="installNo" style="background:transparent;color:#fff;border:0;opacity:.85">暂不</button>
+</div>
 </body>
 </html>
