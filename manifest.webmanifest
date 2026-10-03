@@ -1,15 +1,20 @@
 {
+  "id": "/",
   "name": "轻舟",
   "short_name": "轻舟",
   "description": "你自己的私人 AI 助手，能主动找你。",
+  "lang": "zh-CN",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#1d4ed8",
+  "categories": ["productivity", "utilities"],
   "icons": [
-    { "src": "icons/onboard-cloud.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
-    { "src": "icons/idea-pc.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/onboard-cloud.png", "sizes": "384x384", "type": "image/png", "purpose": "any" }
   ]
 }
