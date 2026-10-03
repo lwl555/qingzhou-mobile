@@ -1766,6 +1766,24 @@ $('#pushTestBtn') && ($('#pushTestBtn').onclick = pushTest);
 renderPushBtn();
 // 注册 SW（轮询和推送都靠它）并启动轮询
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// 安装到桌面引导（PWA）
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredInstall = e;
+  const bar = document.getElementById('installBar');
+  if (bar) bar.style.display = 'flex';
+});
+const installBtn = document.getElementById('installBtn');
+if (installBtn) installBtn.onclick = async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  try { await deferredInstall.userChoice; } catch (_) {}
+  deferredInstall = null;
+  const bar = document.getElementById('installBar'); if (bar) bar.style.display = 'none';
+};
+const installNo = document.getElementById('installNo');
+if (installNo) installNo.onclick = () => { const bar = document.getElementById('installBar'); if (bar) bar.style.display = 'none'; };
 setTimeout(checkDue, 3000);
 setInterval(checkDue, 60000);
 
@@ -1938,6 +1956,7 @@ async function vpFetch() {
     img.style.display = 'block';
     vpMsg('');
     $('#vpUrl').textContent = (r.title ? r.title + ' · ' : '') + (r.url || '（空白页）');
+    if (r.text || (r.els && r.els.length)) renderVpBrief(r.text, r.els);
   } catch (e) {
     vpMsg(/电脑没回应/.test(e.message || '')
       ? '取画面失败：电脑没回应。电脑上轻舟还在跑吗？电脑端「远程操作」开着的话，再点「刷新」试试（第一次启动浏览器会慢些）。'
@@ -1961,6 +1980,9 @@ function vpShut() {
   if (vpTimer) { clearInterval(vpTimer); vpTimer = null; }
 }
 $('#vpOpenBtn') && ($('#vpOpenBtn').onclick = vpOpen);
+$('#vpOpenUrl') && ($('#vpOpenUrl').onclick = vpOpenUrl);
+$('#vpRead') && ($('#vpRead').onclick = vpRead);
+$('#vpRun') && ($('#vpRun').onclick = vpRunTask);
 $('#vpClose') && ($('#vpClose').onclick = vpShut);
 $('#vpRefresh') && ($('#vpRefresh').onclick = vpFetch);
 $('#vpBack') && ($('#vpBack').onclick = async () => { await vpTouch({ action: 'back' }); setTimeout(vpFetch, 900); });
@@ -1987,6 +2009,45 @@ $('#vpType') && ($('#vpType').onclick = async () => {
   $('#vpText').value = '';
   setTimeout(vpFetch, 700);
 });
+
+/* 云端浏览器任务：让电脑打开任意网址并取回画面+内容，或读当前页，或交给 AI 操作 */
+async function vpOpenUrl() {
+  if (state.mode !== 'remote') { toast('要先远程连上电脑'); return; }
+  const url = ($('#vpUrlInput').value || '').trim();
+  if (!/^https?:\/\//i.test(url)) { toast('请输入以 http(s):// 开头的网址'); return; }
+  vpMsg('正在让电脑打开 ' + url + ' …');
+  try {
+    const r = await remoteQuery({ cmd: 'browser_task', task: { action: 'open', url } }, 'browser_view', 40000);
+    if (!r.ok) { vpMsg(r.error || '打开失败'); return; }
+    const img = $('#vpImg'); img.src = r.dataUrl; img.style.display = 'block'; vpMsg('');
+    $('#vpUrl').textContent = (r.title ? r.title + ' · ' : '') + (r.url || '（空白页）');
+    renderVpBrief(r.text, r.els);
+  } catch (e) { vpMsg('打开失败：' + e.message); }
+}
+async function vpRead() {
+  if (state.mode !== 'remote') { toast('要先远程连上电脑'); return; }
+  vpMsg('正在读取当前页面内容…');
+  try {
+    const r = await remoteQuery({ cmd: 'browser_task', task: { action: 'read' } }, 'browser_view', 40000);
+    if (!r.ok) { vpMsg(r.error || '读取失败'); return; }
+    renderVpBrief(r.text, r.els); vpMsg('');
+  } catch (e) { vpMsg('读取失败：' + e.message); }
+}
+function renderVpBrief(text, els) {
+  const b = $('#vpBrief'); if (!b) return;
+  const elLine = (els && els.length) ? '\n可交互元素：\n' + els.map(e => `${e.i}. [${e.tag}] ${e.text || '(空)'}`).join('\n') : '';
+  b.textContent = (text || '（页面无可读正文）') + elLine;
+  b.hidden = false;
+}
+async function vpRunTask() {
+  if (state.mode !== 'remote') { toast('要先远程连上电脑'); return; }
+  const url = ($('#vpUrlInput').value || '').trim();
+  const desc = prompt('让电脑在浏览器里做什么？例如：把页面里的价格记下来发给我');
+  if (!desc) return;
+  const goal = (url ? `请使用浏览器工具打开 ${url} 并在该页面上` : '请使用浏览器工具在当前已打开的页面上') + `完成以下任务：${desc}。完成后把结果告诉我。`;
+  txt.value = goal;
+  await send();
+}
 $('#vpEnter') && ($('#vpEnter').onclick = async () => { await vpTouch({ action: 'key', text: 'Enter' }); setTimeout(vpFetch, 1200); });
 
 renderAvatar(); fillPresets();
