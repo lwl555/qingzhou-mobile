@@ -2227,6 +2227,15 @@ function ensureMobilePet() {
   box.className = 'mpet-box';
   box.innerHTML = '<img src="pet/pet.png" alt="小伴" draggable="false">';
   box.onclick = () => {
+    // 单击蹦跶；双击收起来（不用专门去找设置）
+    const now = Date.now();
+    if (now - (box._lastTap || 0) < 320) {
+      box._lastTap = 0;
+      setMobilePet(false);
+      alog('小伴先藏起来了 —— 想找它回「连接/我的」里打开');
+      return;
+    }
+    box._lastTap = now;
     box.classList.remove('jump'); void box.offsetWidth; box.classList.add('jump');
     setTimeout(() => box.classList.remove('jump'), 900);
   };
