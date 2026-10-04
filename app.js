@@ -15,8 +15,13 @@ const SB = { url: 'https://wcnssyiqitugqfmcbdhe.supabase.co', key: CLOUD.key };
 const CLOUD_MODELS = ['agnes-2.0-flash', 'agnes-2.5-flash', 'agnes-2.5-pro', 'agnes-3.0-flash'];
 
 // 当前版本号（手机版）。更新日志手机版 / 电脑版分开记，App 内「版本与更新」各自展示。
-const APP_VERSION = '1.26.2';
+const APP_VERSION = '1.26.3';
 const PHONE_CHANGELOG = [
+  { v: '1.26.3', date: '2026-10-04', items: [
+    '新增自定义聊天背景图（自动压缩存本机，可调浓度）',
+    '新增桌面宠物小伴，点它会蹦跶、能拖着走（默认关着，怕挡打字）',
+    '连电脑时可直接说"截个屏"，用上电脑端的桌面操作能力'
+  ] },
   { v: '1.26.2', date: '2026-10-03', items: [
     '内置云端连不上时自动切 Agnes 直连（不用手动换模型）',
     '内置云端和直连两条路同时生效，默认走内置、失败才切',
@@ -2174,3 +2179,120 @@ function renderVersion() {
   }
 }
 $('#artClose') && ($('#artClose').onclick = () => { const o = $('#artOverlay'); if (o) o.hidden = true; });
+
+/* ================= 界面背景图 + 桌面宠物（手机端） =================
+   背景图压成 jpeg 再存 localStorage（localStorage 只有几 MB，不压会撑爆）。
+   宠物默认关着：手机屏小，怕挡住输入框。 */
+const BG_KEY = 'qz_bg', BG_DIM = 'qz_bg_dim', PET_KEY = 'qz_petOn', PET_POS = 'qz_petPos';
+
+function applyMobileBg() {
+  const bg = localStorage.getItem(BG_KEY) || '';
+  const dim = localStorage.getItem(BG_DIM) || '0.88';
+  const msgs = document.querySelector('.msgs');
+  if (!msgs) return;
+  if (!bg) { msgs.classList.remove('hasbg'); msgs.style.removeProperty('--mbg'); return; }
+  msgs.classList.add('hasbg');
+  msgs.style.setProperty('--mbg', `url("${bg}")`);
+  msgs.style.setProperty('--mdim', dim);
+}
+
+// 压到最大边 1080、jpeg 0.82：够清楚，又不至于把 localStorage 撑爆
+function compressImage(file, maxEdge = 1080, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const fr = new FileReader();
+    fr.onload = () => {
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        const s = Math.min(1, maxEdge / Math.max(w, h));
+        w = Math.round(w * s); h = Math.round(h * s);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = fr.result;
+    };
+    fr.onerror = reject;
+    fr.readAsDataURL(file);
+  });
+}
+
+function ensureMobilePet() {
+  let box = document.querySelector('#mPetBox');
+  if (box) return box;
+  box = document.createElement('div');
+  box.id = 'mPetBox';
+  box.className = 'mpet-box';
+  box.innerHTML = '<img src="pet/pet.png" alt="小伴" draggable="false">';
+  box.onclick = () => {
+    box.classList.remove('jump'); void box.offsetWidth; box.classList.add('jump');
+    setTimeout(() => box.classList.remove('jump'), 900);
+  };
+  // 拖动（手机上只有触摸事件）
+  let sx = 0, sy = 0, ox = 0, oy = 0, drag = false;
+  const pt = e => (e.touches ? e.touches[0] : e);
+  box.addEventListener('touchstart', e => {
+    drag = true;
+    const r = box.getBoundingClientRect();
+    sx = pt(e).clientX; sy = pt(e).clientY; ox = r.left; oy = r.top;
+    box.style.right = 'auto'; box.style.bottom = 'auto';
+    box.style.left = ox + 'px'; box.style.top = oy + 'px';
+  }, { passive: false });
+  window.addEventListener('touchmove', e => {
+    if (!drag) return;
+    const nx = Math.max(0, Math.min(window.innerWidth - box.offsetWidth, ox + pt(e).clientX - sx));
+    const ny = Math.max(0, Math.min(window.innerHeight - box.offsetHeight, oy + pt(e).clientY - sy));
+    box.style.left = nx + 'px'; box.style.top = ny + 'px';
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('touchend', () => {
+    if (!drag) return;
+    drag = false;
+    const r = box.getBoundingClientRect();
+    localStorage.setItem(PET_POS, JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top) }));
+  });
+  document.body.appendChild(box);
+  try {
+    const p = JSON.parse(localStorage.getItem(PET_POS) || 'null');
+    if (p && p.left != null) {
+      box.style.right = 'auto'; box.style.bottom = 'auto';
+      box.style.left = p.left + 'px'; box.style.top = p.top + 'px';
+    }
+  } catch {}
+  return box;
+}
+
+function setMobilePet(on) {
+  const box = ensureMobilePet();
+  box.style.display = on ? '' : 'none';
+  localStorage.setItem(PET_KEY, on ? '1' : '0');
+  const b = $('#petToggleBtn'); if (b) b.textContent = on ? '关掉宠物' : '打开宠物';
+}
+
+$('#bgPickBtn') && ($('#bgPickBtn').onclick = () => { const f = $('#bgFile'); if (f) f.click(); });
+$('#bgFile') && ($('#bgFile').onchange = async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const d = await compressImage(f);
+    localStorage.setItem(BG_KEY, d);
+    applyMobileBg();
+    alog(`背景已设置（压缩后 ${Math.round(d.length / 1024)}KB）`);
+  } catch { alog('这张图处理失败了，换一张试试'); }
+  e.target.value = '';
+});
+$('#bgClearBtn') && ($('#bgClearBtn').onclick = () => {
+  localStorage.removeItem(BG_KEY); applyMobileBg(); alog('已清除背景');
+});
+$('#bgDim') && ($('#bgDim').oninput = e => {
+  localStorage.setItem(BG_DIM, e.target.value); applyMobileBg();
+});
+$('#petToggleBtn') && ($('#petToggleBtn').onclick = () => {
+  setMobilePet(localStorage.getItem(PET_KEY) !== '1');
+});
+$('#petPreview') && ($('#petPreview').src = 'pet/pet.png');
+
+applyMobileBg();
+setMobilePet(localStorage.getItem(PET_KEY) === '1');
