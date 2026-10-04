@@ -401,3 +401,26 @@ body{background:var(--bg);color:var(--ink);
 .filecard .fm span{font-size:11.5px;color:var(--gray2);margin-top:2px}
 .mediacard .fpath{font-size:11px;color:var(--gray2);padding:0 12px 10px;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
 .msg .bub.empty{display:none}
+
+/* ---------- 界面背景图（手机端，自动压图存本地） ---------- */
+.msgs.hasbg{background-image:var(--mbg);background-size:cover;background-position:center;
+  background-attachment:fixed;position:relative}
+.msgs.hasbg::before{content:'';position:absolute;inset:0;background:var(--bg,#fff);
+  opacity:var(--mdim,.88);pointer-events:none;z-index:0}
+.msgs.hasbg > *{position:relative;z-index:1}
+
+/* ---------- 桌面宠物（手机端，默认关） ---------- */
+.mpet-box{position:fixed;right:14px;bottom:112px;z-index:60;width:64px;height:64px;
+  touch-action:none;user-select:none;-webkit-user-select:none}
+.mpet-box img{width:100%;height:100%;display:block;animation:mfloat 3.4s ease-in-out infinite;
+  filter:drop-shadow(0 4px 10px rgba(0,0,0,.16))}
+@keyframes mfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+.mpet-box.jump img{animation:mjump .55s cubic-bezier(.3,1.4,.5,1)}
+@keyframes mjump{0%{transform:translateY(0) scale(1)}
+  35%{transform:translateY(-22px) scale(1.06)}
+  65%{transform:translateY(0) scale(.95)}
+  100%{transform:translateY(0) scale(1)}}
+@media (prefers-reduced-motion:reduce){
+  .mpet-box img{animation:none}
+  .mpet-box.jump img{animation:none}
+}
